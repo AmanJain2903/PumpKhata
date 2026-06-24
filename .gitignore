@@ -216,3 +216,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / Frontend
+node_modules/
+.npm
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# Vite environment variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# MacOS
+.DS_Store
+
+# Venv
+pump-khata/
+
+# Documentation
+docs/
+
