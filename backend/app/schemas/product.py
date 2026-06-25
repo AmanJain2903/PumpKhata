@@ -8,6 +8,7 @@ from app.schemas.timezone_helper import localize_datetime
 class ProductPriceHistoryBase(BaseModel):
     product_id: int
     selling_price: Decimal
+    cost_margin: Decimal
     valid_from: datetime
     valid_to: Optional[datetime] = None
 
@@ -23,6 +24,7 @@ class ProductPriceHistoryCreate(ProductPriceHistoryBase):
 
 class ProductPriceHistoryUpdate(BaseModel):
     selling_price: Optional[Decimal] = None
+    cost_margin: Optional[Decimal] = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
 

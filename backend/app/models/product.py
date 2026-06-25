@@ -34,6 +34,7 @@ class ProductPriceHistory(Base):
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     selling_price = Column(Numeric(10, 2), nullable=False)
+    cost_margin = Column(Numeric(10, 2), nullable=False)
     valid_from = Column(DateTime(timezone=True), nullable=False)
     valid_to = Column(DateTime(timezone=True), nullable=True)
 
