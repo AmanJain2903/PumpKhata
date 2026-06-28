@@ -142,3 +142,76 @@ def get_product_price_history(product_id: int, db: Session = Depends(get_db)):
     return db.query(ProductPriceHistory).filter(
         ProductPriceHistory.product_id == product_id
     ).order_by(ProductPriceHistory.valid_from.desc()).all()
+@router.get("/{product_id}/usage")
+def get_product_usage(product_id: int, db: Session = Depends(get_db)):
+    """Check if a product is linked to any pump or tank in the database."""
+    db_product = db.query(Product).filter(Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    from app.models.tank import Tank
+    tanks_count = db.query(Tank).filter(Tank.product_id == product_id).count()
+    pumps_count = len(db_product.pumps)
+
+    return {
+        "in_use": (tanks_count > 0 or pumps_count > 0),
+        "tanks_count": tanks_count,
+        "pumps_count": pumps_count
+    }
+
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(product_id: int, db: Session = Depends(get_db)):
+    """Delete a product, related tanks, nozzles, logs, price history, and pump associations."""
+    db_product = db.query(Product).filter(Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    from app.models.tank import Tank
+    from app.models.machine import Nozzle, Machine
+    from app.models.log import DailyNozzleLog, DailyTankLog
+    from app.models.product import product_pumps
+
+    # 1. Find all tanks connected to this product
+    tanks = db.query(Tank).filter(Tank.product_id == product_id).all()
+    tank_ids = [t.id for t in tanks]
+
+    if tank_ids:
+        # 2. Find all nozzles linked to these tanks
+        nozzles = db.query(Nozzle).filter(Nozzle.tank_id.in_(tank_ids)).all()
+        nozzle_ids = [n.id for n in nozzles]
+
+        if nozzle_ids:
+            # Group nozzles by machine_id to update machine nozzle counts
+            machine_nozzle_counts = {}
+            for n in nozzles:
+                machine_nozzle_counts[n.machine_id] = machine_nozzle_counts.get(n.machine_id, 0) + 1
+
+            # 3. Delete all DailyNozzleLog entries linked to these nozzles
+            db.query(DailyNozzleLog).filter(DailyNozzleLog.nozzle_id.in_(nozzle_ids)).delete(synchronize_session=False)
+            # 4. Delete Nozzle entries
+            db.query(Nozzle).filter(Nozzle.id.in_(nozzle_ids)).delete(synchronize_session=False)
+
+            # 5. Process machines: decrease nozzle counts, and delete machines if they reach 0 nozzles
+            for m_id, count in machine_nozzle_counts.items():
+                machine = db.query(Machine).filter(Machine.id == m_id).first()
+                if machine:
+                    machine.number_of_nozzles -= count
+                    if machine.number_of_nozzles <= 0:
+                        db.delete(machine)
+
+        # 6. Delete DailyTankLog entries linked to these tanks
+        db.query(DailyTankLog).filter(DailyTankLog.tank_id.in_(tank_ids)).delete(synchronize_session=False)
+        # 7. Delete Tank entries
+        db.query(Tank).filter(Tank.product_id == product_id).delete(synchronize_session=False)
+
+    # 7. Delete relationship entries in product_pumps association table
+    db.execute(product_pumps.delete().where(product_pumps.c.product_id == product_id))
+
+    # 8. Delete all price history records
+    db.query(ProductPriceHistory).filter(ProductPriceHistory.product_id == product_id).delete(synchronize_session=False)
+
+    # 9. Finally delete the product
+    db.delete(db_product)
+    db.commit()
+
+    return None

@@ -7,6 +7,8 @@ class TankBase(BaseModel):
     product_id: int
     name: str
     max_capacity: Decimal
+    actual_dip_volume: Decimal
+    variance: Decimal
 
 class TankCreate(TankBase):
     pass
@@ -16,6 +18,8 @@ class TankUpdate(BaseModel):
     product_id: Optional[int] = None
     name: Optional[str] = None
     max_capacity: Optional[Decimal] = None
+    actual_dip_volume: Optional[Decimal] = None
+    variance: Optional[Decimal] = None
 
 class TankResponse(TankBase):
     id: int

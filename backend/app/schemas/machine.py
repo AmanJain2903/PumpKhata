@@ -1,5 +1,12 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
+from decimal import Decimal
+from datetime import date
+
+# --- Nozzle Initialize Schema ---
+class NozzleInitialize(BaseModel):
+    opening_reading: Decimal
+    log_date: Optional[date] = None
 
 # --- Nozzle Schemas ---
 class NozzleBase(BaseModel):
