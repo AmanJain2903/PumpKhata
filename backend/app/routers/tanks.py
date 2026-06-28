@@ -1,12 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from decimal import Decimal
 
 from app.database import get_db
 from app.models.tank import Tank
 from app.models.fuel_pump import FuelPump
 from app.models.product import Product
+from app.models.log import DailyTankLog
 from app.schemas.tank import TankCreate, TankUpdate, TankResponse
+
+IST = ZoneInfo("Asia/Kolkata")
 
 router = APIRouter(prefix="/tanks", tags=["Tanks"])
 
@@ -34,9 +40,25 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
         pump_id=tank.pump_id,
         product_id=tank.product_id,
         name=tank.name,
-        max_capacity=tank.max_capacity
+        max_capacity=tank.max_capacity,
+        actual_dip_volume=tank.actual_dip_volume,
+        variance=tank.variance
     )
     db.add(db_tank)
+    db.flush()
+
+    # Create starting DailyTankLog entry
+    now = datetime.now(IST)
+    start_log = DailyTankLog(
+        tank_id=db_tank.id,
+        log_date=now.date(),
+        log_timestamp=now,
+        testing_liters=Decimal('0.00'),
+        fuel_received=Decimal('0.00'),
+        actual_dip_volume=db_tank.actual_dip_volume,
+        calculated_variance=Decimal('0.00')
+    )
+    db.add(start_log)
     db.commit()
     db.refresh(db_tank)
     return db_tank

@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.database import get_db
 from app.models.machine import Machine, Nozzle
 from app.models.fuel_pump import FuelPump
 from app.models.tank import Tank
+from app.models.log import DailyNozzleLog
 from app.schemas.machine import (
     MachineCreate,
     MachineUpdate,
@@ -13,7 +16,10 @@ from app.schemas.machine import (
     NozzleCreate,
     NozzleUpdate,
     NozzleResponse,
+    NozzleInitialize,
 )
+
+IST = ZoneInfo("Asia/Kolkata")
 
 router = APIRouter(tags=["Machines & Nozzles"])
 
@@ -168,3 +174,39 @@ def delete_nozzle(nozzle_id: int, db: Session = Depends(get_db)):
     nozzle.is_active = False
     db.commit()
     return
+
+@router.post("/nozzles/{nozzle_id}/initialize", status_code=status.HTTP_200_OK)
+def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = Depends(get_db)):
+    """Initialize a starting base meter reading for a nozzle."""
+    nozzle = db.query(Nozzle).filter(Nozzle.id == nozzle_id, Nozzle.is_active == True).first()
+    if not nozzle:
+        raise HTTPException(status_code=404, detail="Nozzle not found")
+
+    target_date = payload.log_date or datetime.now(IST).date()
+
+    # Check if a log already exists for this date
+    existing_log = db.query(DailyNozzleLog).filter(
+        DailyNozzleLog.nozzle_id == nozzle_id,
+        DailyNozzleLog.log_date == target_date
+    ).first()
+
+    if existing_log:
+        existing_log.opening_reading = payload.opening_reading
+        existing_log.closing_reading = payload.opening_reading
+        existing_log.gross_liters_sold = 0
+        db.commit()
+        db.refresh(existing_log)
+        return {"status": "updated", "id": existing_log.id}
+    else:
+        new_log = DailyNozzleLog(
+            nozzle_id=nozzle_id,
+            log_date=target_date,
+            log_timestamp=datetime.now(IST),
+            opening_reading=payload.opening_reading,
+            closing_reading=payload.opening_reading,
+            gross_liters_sold=0
+        )
+        db.add(new_log)
+        db.commit()
+        db.refresh(new_log)
+        return {"status": "created", "id": new_log.id}

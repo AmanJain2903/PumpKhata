@@ -10,6 +10,8 @@ class Tank(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     name = Column(String(100), nullable=False)
     max_capacity = Column(Numeric(12, 2), nullable=False)
+    actual_dip_volume = Column(Numeric(12, 2), nullable=False)
+    variance = Column(Numeric(12, 2), nullable=False)
 
     # Relationships
     pump = relationship("FuelPump", back_populates="tanks")
