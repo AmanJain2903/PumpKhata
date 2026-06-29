@@ -50,6 +50,11 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [isCheckingBalances, setIsCheckingBalances] = useState(false);
   const [unclearedAccounts, setUnclearedAccounts] = useState<CreditAccount[]>([]);
 
+  // Renaming Fuel Pump states
+  const [isEditingPumpName, setIsEditingPumpName] = useState(false);
+  const [pumpNameInput, setPumpNameInput] = useState('');
+  const [isSavingPumpName, setIsSavingPumpName] = useState(false);
+
   // Scroll to top on component mount or pumpId change
   useEffect(() => {
     const forceScrollToTop = () => {
@@ -152,6 +157,27 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     }
   };
 
+  const handleStartRenamePump = () => {
+    if (!pump) return;
+    setPumpNameInput(pump.name);
+    setIsEditingPumpName(false); // set to edit mode
+    setIsEditingPumpName(true);
+  };
+
+  const handleSaveRenamePump = async () => {
+    if (!pump || !pumpNameInput.trim()) return;
+    setIsSavingPumpName(true);
+    try {
+      await apiService.updatePump(pump.id, { name: pumpNameInput.trim() });
+      await fetchStationConfig();
+      setIsEditingPumpName(false);
+    } catch (err: any) {
+      alert(err.message || 'Failed to rename fuel pump station.');
+    } finally {
+      setIsSavingPumpName(false);
+    }
+  };
+
   const fetchStationConfig = async () => {
     setIsLoading(true);
     setError('');
@@ -192,16 +218,6 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
         fillColor: '#8b5cf6',
         glow: 'shadow-violet-500/30 shadow-lg',
         ringColor: 'ring-violet-500/40'
-      },
-      {
-        bg: 'bg-rose-500',
-        text: 'text-rose-750',
-        border: 'border-rose-500',
-        inactiveBorder: 'border-rose-200/80',
-        lightBg: 'bg-rose-50',
-        fillColor: '#f43f5e',
-        glow: 'shadow-rose-500/30 shadow-lg',
-        ringColor: 'ring-rose-500/40'
       },
       {
         bg: 'bg-sky-500',
@@ -289,18 +305,6 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     const name = productName.toUpperCase();
     if (name.includes('DIESEL') || name.includes('HSD')) {
       return {
-        bg: 'bg-amber-500',
-        text: 'text-amber-700',
-        border: 'border-amber-500',
-        inactiveBorder: 'border-amber-200/80',
-        lightBg: 'bg-amber-50',
-        fillColor: '#f59e0b',
-        glow: 'shadow-amber-500/30 shadow-lg',
-        ringColor: 'ring-amber-500/40'
-      };
-    }
-    if (name.includes('XP95') || name.includes('PREMIUM') || name.includes('SPEED')) {
-      return {
         bg: 'bg-indigo-500',
         text: 'text-indigo-700',
         border: 'border-indigo-500',
@@ -311,7 +315,32 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
         ringColor: 'ring-indigo-500/40'
       };
     }
+    if (name.includes('XP95') || name.includes('PREMIUM') || name.includes('SPEED')) {
+      return {
+        bg: 'bg-rose-500',
+        text: 'text-rose-750',
+        border: 'border-rose-500',
+        inactiveBorder: 'border-rose-200/80',
+        lightBg: 'bg-rose-50',
+        fillColor: '#f43f5e',
+        glow: 'shadow-rose-500/30 shadow-lg',
+        ringColor: 'ring-rose-500/40'
+      };
+    }
     if (name.includes('MS') || name.includes('PETROL')) {
+      return {
+        bg: 'bg-amber-500',
+        text: 'text-amber-700',
+        border: 'border-amber-500',
+        inactiveBorder: 'border-amber-200/80',
+        lightBg: 'bg-amber-50',
+        fillColor: '#f59e0b',
+        glow: 'shadow-amber-500/30 shadow-lg',
+        ringColor: 'ring-amber-500/40'
+      };
+    }
+
+    if (name.includes('XG') || name.includes('GREEN')) {
       return {
         bg: 'bg-emerald-500',
         text: 'text-emerald-700',
@@ -331,14 +360,14 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
     // Default fallback
     return {
-      bg: 'bg-emerald-500',
-      text: 'text-emerald-700',
-      border: 'border-emerald-500',
-      inactiveBorder: 'border-emerald-200/80',
-      lightBg: 'bg-emerald-50',
-      fillColor: '#10b981',
-      glow: 'shadow-emerald-500/30 shadow-lg',
-      ringColor: 'ring-emerald-500/40'
+      bg: 'bg-orange-500',
+      text: 'text-orange-750',
+      border: 'border-orange-500',
+      inactiveBorder: 'border-orange-200/80',
+      lightBg: 'bg-orange-50',
+      fillColor: '#f97316',
+      glow: 'shadow-orange-500/30 shadow-lg',
+      ringColor: 'ring-orange-500/40'
     };
   };
 
@@ -773,14 +802,66 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
               <span>/</span>
               <span className="text-slate-800">{pump?.name || 'Loading...'}</span>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display flex items-center gap-3">
-              <span>{pump?.name || 'Manage Station'}</span>
-              {pump && pump.is_active === false && (
-                <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 uppercase tracking-wider select-none shrink-0 font-sans">
-                  Inactive Station
-                </span>
-              )}
-            </h1>
+            {isEditingPumpName ? (
+              <div className="flex items-center gap-2 mt-1.5 animate-fadeIn">
+                <input
+                  type="text"
+                  value={pumpNameInput}
+                  onChange={(e) => setPumpNameInput(e.target.value)}
+                  className="text-2xl font-bold text-slate-900 border border-slate-350 rounded-xl px-3 py-1 focus:outline-emerald-500 max-w-xs focus:ring-1 focus:ring-emerald-500 font-display"
+                  disabled={isSavingPumpName}
+                  placeholder="Enter station name..."
+                  autoFocus
+                />
+                <button
+                  onClick={handleSaveRenamePump}
+                  disabled={isSavingPumpName || !pumpNameInput.trim()}
+                  className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Save Name"
+                >
+                  {isSavingPumpName ? (
+                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  onClick={() => setIsEditingPumpName(false)}
+                  disabled={isSavingPumpName}
+                  className="p-2 rounded-xl border border-slate-200 hover:border-slate-350 hover:bg-slate-50 text-slate-550 transition-colors cursor-pointer"
+                  title="Cancel"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display flex items-center gap-3">
+                <span>{pump?.name || 'Manage Station'}</span>
+                {pump && (
+                  <button
+                    onClick={handleStartRenamePump}
+                    className="p-1 rounded-lg text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                    title="Rename Station"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                  </button>
+                )}
+                {pump && pump.is_active === false && (
+                  <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 uppercase tracking-wider select-none shrink-0 font-sans">
+                    Inactive Station
+                  </span>
+                )}
+              </h1>
+            )}
             <p className="text-sm text-slate-500 mt-1">
               {pump?.location || 'Forecourt operations workspace'}
             </p>
