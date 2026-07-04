@@ -3,6 +3,8 @@ import { apiService } from '../services/api';
 import type { FuelPump, Tank, Machine, Nozzle, Product, CreditAccount } from '../services/api';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { SmartDropdown } from '../components/SmartDropdown';
+import { DailyLogWorkspace } from './DailyLogWorkspace';
+
 
 interface ManageStationProps {
   pumpId: number;
@@ -19,6 +21,33 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [customProductColors, setCustomProductColors] = useState<Record<string, any>>({});
+  const [activeView, setActiveView] = useState<'manage' | 'ops_log'>('manage');
+  const [todayLogStatus, setTodayLogStatus] = useState<'NOT_LOGGED' | 'OPEN' | 'CLOSED'>('NOT_LOGGED');
+  const [workspaceKey, setWorkspaceKey] = useState(0);
+
+  const getISTDateString = () => {
+    const now = new Date();
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const istTime = new Date(utcTime + (5.5 * 3600000));
+
+    const yyyy = istTime.getFullYear();
+    const mm = String(istTime.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTime.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const handleReopenSession = async () => {
+    try {
+      const summary = await apiService.getSessionSummary(pumpId);
+      if (summary && summary.session_id) {
+        await apiService.reopenSession(summary.session_id);
+        await fetchStationConfig();
+        setWorkspaceKey(prev => prev + 1);
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to re-open session");
+    }
+  };
 
   // Interactive customization state hooks
   const [isEditing, setIsEditing] = useState(false);
@@ -198,8 +227,18 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       setNozzles(configNozzles);
 
       // Save products list
-      setProducts(config.products || []);
+      const allProducts = await apiService.getProducts();
+      setProducts(allProducts);
+
+      // Fetch today's log status
+      try {
+        const summary = await apiService.getSessionSummary(pumpId);
+        setTodayLogStatus(summary.status);
+      } catch (err) {
+        console.error('Failed to fetch session summary', err);
+      }
     } catch (err: any) {
+
       setError(err.message || 'Failed to fetch station forecourt configuration.');
     } finally {
       setIsLoading(false);
@@ -751,14 +790,16 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
 
 
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans relative overflow-x-hidden">
+
       {/* Light-theme ambient decorative glows */}
       <div className="absolute top-0 right-1/4 w-[500px] h-[550px] bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
       {/* Sticky Top Navigation Bar */}
-      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
+      <nav className="fixed top-0 left-0 right-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div
@@ -788,11 +829,11 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       </nav>
 
       {/* Main Content Workspace Container */}
-      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10 w-full">
+      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">
         {/* Navigation Breadcrumb, title, and action edit modes */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 pb-6 border-b border-slate-200">
           <div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 mb-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-550 mb-2">
               <button
                 onClick={onBack}
                 className="hover:text-emerald-600 transition-colors flex items-center gap-1 cursor-pointer"
@@ -800,9 +841,32 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 Dashboard
               </button>
               <span>/</span>
-              <span className="text-slate-800">{pump?.name || 'Loading...'}</span>
+              {activeView === 'ops_log' ? (
+                <button
+                  onClick={() => {
+                    setActiveView('manage');
+                    fetchStationConfig();
+                  }}
+                  className="hover:text-emerald-600 transition-colors cursor-pointer"
+                >
+                  {pump?.name || 'Station'}
+                </button>
+              ) : (
+                <span className="text-slate-800">{pump?.name || 'Loading...'}</span>
+              )}
+              {activeView === 'ops_log' && (
+                <>
+                  <span>/</span>
+                  <span className="text-slate-800 font-bold">Daily Operations Log</span>
+                </>
+              )}
             </div>
-            {isEditingPumpName ? (
+
+            {activeView === 'ops_log' ? (
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display flex items-center gap-3">
+                Daily Operations Log
+              </h1>
+            ) : isEditingPumpName ? (
               <div className="flex items-center gap-2 mt-1.5 animate-fadeIn">
                 <input
                   type="text"
@@ -862,154 +926,507 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 )}
               </h1>
             )}
-            <p className="text-sm text-slate-500 mt-1">
-              {pump?.location || 'Forecourt operations workspace'}
-            </p>
+
+            {activeView === 'ops_log' ? (
+              <p className="text-xs text-slate-500 mt-1 flex items-center gap-2 font-bold uppercase tracking-wider">
+                <span className="text-slate-700">{getISTDateString()}</span>
+                <span>•</span>
+                <span className={`rounded-md text-[9px] font-extrabold tracking-wide uppercase ${todayLogStatus === 'CLOSED' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : 'Open 🟢'}
+                </span>
+              </p>
+            ) : (
+              <p className="text-sm text-slate-500 mt-1">
+                {pump?.location || 'Forecourt operations workspace'}
+              </p>
+            )}
           </div>
 
-          {pump && (
-            <div className="flex items-center gap-2.5 shrink-0">
-              {pump.is_active === false ? (
-                <button
-                  onClick={handleToggleStationActive}
-                  disabled={isTogglingActive}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer border border-emerald-650"
-                >
-                  Activate Station
-                </button>
-              ) : (
-                <button
-                  onClick={handleToggleStationActive}
-                  disabled={isTogglingActive}
-                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
-                >
-                  Deactivate Station
-                </button>
-              )}
+          {activeView === 'ops_log' ? (
+            todayLogStatus === 'CLOSED' && (
               <button
-                onClick={handleOpenDeletePumpModal}
-                disabled={isTogglingActive || isDeletingPump}
-                className="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                onClick={handleReopenSession}
+                className="py-2.5 px-4 rounded-xl text-xs font-bold uppercase bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
               >
-                Delete Station
+                🔓 Re-open today's session
               </button>
-            </div>
+            )
+          ) : (
+            pump && (
+              <div className="flex items-center gap-2.5 shrink-0">
+                {pump.is_active === false ? (
+                  <button
+                    onClick={handleToggleStationActive}
+                    disabled={isTogglingActive}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer border border-emerald-600"
+                  >
+                    Activate Station
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleToggleStationActive}
+                    disabled={isTogglingActive}
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                  >
+                    Deactivate Station
+                  </button>
+                )}
+                <button
+                  onClick={handleOpenDeletePumpModal}
+                  disabled={isTogglingActive || isDeletingPump}
+                  className="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  Delete Station
+                </button>
+              </div>
+            )
           )}
         </div>
 
-        {/* Validation Errors alert panel */}
-        {validationErrors.length > 0 && (
-          <div className="mb-6 p-5 bg-rose-50 border border-rose-150 rounded-2xl text-rose-800 animate-fadeIn">
-            <h4 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <span>⚠️ Configuration Validation Failed</span>
-            </h4>
-            <ul className="list-disc list-inside text-xs space-y-1.5">
-              {validationErrors.map((err, idx) => (
-                <li key={idx} className="font-semibold">{err}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Tab Workspaces */}
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-24 bg-white border border-slate-200 rounded-3xl shadow-sm">
-            <svg className="animate-spin h-10 w-10 text-emerald-600" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <span className="text-slate-500 text-sm mt-4 font-semibold">Retrieving forecourt configuration...</span>
-          </div>
-        ) : error ? (
-          <div className="p-6 bg-rose-50 border border-rose-200 text-sm text-rose-600 rounded-3xl shadow-sm">
-            {error}
-          </div>
+        {activeView === 'ops_log' ? (
+          <DailyLogWorkspace
+            key={workspaceKey}
+            pumpId={pumpId}
+            onBack={() => {
+              setActiveView('manage');
+              fetchStationConfig();
+            }}
+          />
         ) : (
-          <div className="space-y-8 animate-scaleIn">
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 font-display">Station Map</h3>
-                  <p className="text-xs text-slate-450 mt-0.5">
-                    {isEditing
-                      ? 'Customizing layout. Save changes to commit to database.'
-                      : pump?.is_active === false
-                        ? 'This station is currently inactive. Re-activate to resume daily logs and highlighted operations.'
-                        : 'Hover over a tank or nozzle to highlight physical connections'}
-                  </p>
+          <>
+            {/* Daily Operations Ledger Callout Banner */}
+            {pump && pump.is_active !== false && (
+              <div className="mb-6 p-6 rounded-3xl bg-gradient-to-r from-emerald-500/10 to-teal-500/5 border border-emerald-500/20 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6 animate-fadeIn">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center text-emerald-700 shrink-0 shadow-sm">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-slate-800 tracking-tight font-display">Daily Operations Ledger</h4>
+                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                      <span>Today's Date:</span>
+                      <span className="font-extrabold text-slate-700">{getISTDateString()}</span>
+                      <span className="text-slate-300">•</span>
+                      <span>Status:</span>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                        todayLogStatus === 'CLOSED'
+                          ? 'bg-rose-50 text-rose-700 border border-rose-250'
+                          : todayLogStatus === 'OPEN'
+                            ? 'bg-amber-50 text-amber-700 border border-amber-250'
+                            : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}>
+                        {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : todayLogStatus === 'OPEN' ? 'In Progress ⚡' : 'Not Started 📝'}
+                      </span>
+                    </p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={handleCancelEdit}
-                        disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-350 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all shadow-sm cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveConfiguration}
-                        disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-650 hover:to-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
-                      >
-                        {isSaving && (
-                          <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                        )}
-                        Save Layout Changes
-                      </button>
-                    </>
+                <div className="flex items-center gap-3 shrink-0">
+                  {todayLogStatus === 'CLOSED' ? (
+                    <button
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                    >
+                      <span>👁️ View Today's Closed Ledger</span>
+                    </button>
+                  ) : todayLogStatus === 'OPEN' ? (
+                    <button
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
+                    >
+                      <span>⚡ Continue Today's Log</span>
+                    </button>
                   ) : (
                     <button
-                      onClick={handleStartEdit}
-                      className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                      Edit Station Map
+                      <span>Log Today ✍️</span>
                     </button>
                   )}
                 </div>
               </div>
+            )}
 
-              {tanks.length === 0 && !isEditing ? (
-                <div className="text-center py-16 bg-slate-50/50 border border-dashed border-slate-200 rounded-2xl">
-                  <p className="text-xs text-slate-500 font-semibold">No equipment configured for this pump station.</p>
-                </div>
-              ) : isEditing ? (
-                <div className="space-y-8 relative min-h-[480px]">
+            {/* Validation Errors alert panel */}
+            {validationErrors.length > 0 && (
+              <div className="mb-6 p-5 bg-rose-50 border border-rose-150 rounded-2xl text-rose-800 animate-fadeIn">
+                <h4 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <span>⚠️ Configuration Validation Failed</span>
+                </h4>
+                <ul className="list-disc list-inside text-xs space-y-1.5">
+                  {validationErrors.map((err, idx) => (
+                    <li key={idx} className="font-semibold">{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-                  {/* 1. Storage Tanks Section (Top Stack) */}
-                  <div className="space-y-4">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Underground Tanks
-                    </span>
+            {/* Tab Workspaces */}
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center py-24 bg-white border border-slate-200 rounded-3xl shadow-sm">
+                <svg className="animate-spin h-10 w-10 text-emerald-600" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="text-slate-500 text-sm mt-4 font-semibold">Retrieving forecourt configuration...</span>
+              </div>
+            ) : error ? (
+              <div className="p-6 bg-rose-50 border border-rose-200 text-sm text-rose-600 rounded-3xl shadow-sm">
+                {error}
+              </div>
+            ) : (
+              <div className="space-y-8 animate-scaleIn">
+                <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 font-display">Station Map</h3>
+                      <p className="text-xs text-slate-450 mt-0.5">
+                        {isEditing
+                          ? 'Customizing layout. Save changes to commit to database.'
+                          : pump?.is_active === false
+                            ? 'This station is currently inactive. Re-activate to resume daily logs and highlighted operations.'
+                            : 'Hover over a tank or nozzle to highlight physical connections'}
+                      </p>
+                    </div>
 
-                    <div className="grid grid-cols-1 gap-4">
-                      {draftTanks.map((tank) => {
-                        const productColors = getProductColor(tank.product_name || '');
-                        const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
-                        const isHighlighted = isTankHighlighted(tank.id || tank.temp_id);
-                        const varianceVal = parseFloat(tank.variance as any) || 0;
-
-                        return (
-                          <div
-                            key={tank.id || tank.temp_id}
-                            onMouseEnter={() => setHoveredTankId(tank.id || tank.temp_id)}
-                            onMouseLeave={() => setHoveredTankId(null)}
-                            className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
-                              ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
-                              : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
-                              }`}
+                    <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
+                      {isEditing ? (
+                        <>
+                          <button
+                            onClick={handleCancelEdit}
+                            disabled={isSaving}
+                            className="px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-350 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all shadow-sm cursor-pointer"
                           >
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                              {/* Left details */}
-                              <div className="flex items-center gap-4 min-w-[200px]">
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveConfiguration}
+                            disabled={isSaving}
+                            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                          >
+                            {isSaving && (
+                              <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            )}
+                            Save Layout Changes
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={handleStartEdit}
+                          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                          Edit Station Map
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {tanks.length === 0 && !isEditing ? (
+                    <div className="text-center py-16 bg-slate-50/50 border border-dashed border-slate-200 rounded-2xl">
+                      <p className="text-xs text-slate-500 font-semibold">No equipment configured for this pump station.</p>
+                    </div>
+                  ) : isEditing ? (
+                    <div className="space-y-8 relative min-h-[480px]">
+
+                      {/* 1. Storage Tanks Section (Top Stack) */}
+                      <div className="space-y-4">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Underground Tanks
+                        </span>
+
+                        <div className="grid grid-cols-1 gap-4">
+                          {draftTanks.map((tank) => {
+                            const productColors = getProductColor(tank.product_name || '');
+                            const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
+                            const isHighlighted = isTankHighlighted(tank.id || tank.temp_id);
+                            const varianceVal = parseFloat(tank.variance as any) || 0;
+
+                            return (
+                              <div
+                                key={tank.id || tank.temp_id}
+                                onMouseEnter={() => setHoveredTankId(tank.id || tank.temp_id)}
+                                onMouseLeave={() => setHoveredTankId(null)}
+                                className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
+                                  ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
+                                  : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
+                                  }`}
+                              >
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                                  {/* Left details */}
+                                  <div className="flex items-center gap-4 min-w-[200px]">
+                                    <div>
+                                      <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
+                                      <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
+                                        {tank.product_name}
+                                      </span>
+                                    </div>
+
+                                    {varianceVal !== 0 && (
+                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${varianceVal > 0
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-250'
+                                        : 'bg-rose-50 text-rose-700 border-rose-250'
+                                        }`}>
+                                        {varianceVal > 0 ? `+${varianceVal.toFixed(1)} L` : `${varianceVal.toFixed(1)} L`}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Center Level Fill cylinder */}
+                                  <div className="flex-grow max-w-xl space-y-1.5 w-full">
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                                      <span>Level</span>
+                                      <span>{fillPercent.toFixed(1)}% Filled</span>
+                                    </div>
+
+                                    <div className="h-6 w-full rounded-lg bg-slate-100 border border-slate-200 overflow-hidden relative shadow-inner">
+                                      <div
+                                        className={`absolute top-0 bottom-0 left-0 rounded-r-md transition-all duration-700 ${productColors.bg}`}
+                                        style={{ width: `${fillPercent}%` }}
+                                      />
+                                      <div className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-slate-700 mix-blend-difference tracking-wider font-sans">
+                                        {parseFloat(tank.actual_dip_volume as any).toLocaleString()} / {parseFloat(tank.max_capacity as any).toLocaleString()} Ltrs
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Tank configuration buttons */}
+                                  <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
+                                    <button
+                                      onClick={() => handleOpenEditTankModal(tank)}
+                                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
+                                      title="Edit Tank Details"
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                      </svg>
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteTank(tank)}
+                                      className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                      title="Delete Tank"
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          onClick={handleOpenAddTankModal}
+                          className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                          </svg>
+                          Add Storage Tank
+                        </button>
+                      </div>
+
+                      {/* Dispenser Units Section (Bottom Stack) */}
+                      <div className="space-y-4 pt-8 border-t border-slate-100">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Dispenser Units
+                        </span>
+
+                        <div className="grid grid-cols-1 gap-6">
+                          {draftMachines.map((mach) => {
+                            const machKey = mach.id || mach.temp_id;
+                            const machineNozzles = draftNozzles.filter(n => (mach.id && n.machine_id === mach.id) || (mach.temp_id && n.machine_temp_id === mach.temp_id));
+
+                            return (
+                              <div
+                                key={machKey}
+                                className="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm relative animate-fadeIn"
+                              >
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                                  <input
+                                    type="text"
+                                    value={mach.name}
+                                    onChange={(e) => handleRenameMachine(mach, e.target.value)}
+                                    className="text-sm font-extrabold text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-grow bg-slate-50 focus:bg-white focus:outline-emerald-500 w-full"
+                                  />
+
+                                  <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
+                                    <label className="flex items-center gap-1.5 text-xs font-bold text-slate-500 cursor-pointer select-none shrink-0 border border-slate-200 rounded-lg px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 transition-colors shadow-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={mach.is_active !== false}
+                                        onChange={() => handleToggleMachineActive(machKey, mach.is_active !== false)}
+                                        className="accent-emerald-600 cursor-pointer"
+                                      />
+                                      <span>Active</span>
+                                    </label>
+
+                                    <button
+                                      onClick={() => handleDeleteMachine(mach)}
+                                      className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                      title="Delete Dispenser"
+                                    >
+                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+                                  {machineNozzles.map((nozzle) => {
+                                    const nozzleKey = nozzle.id || nozzle.temp_id;
+                                    const colors = getProductColor(nozzle.product_name || '');
+                                    const isHighlighted = isNozzleHighlighted(nozzle);
+
+                                    return (
+                                      <div
+                                        key={nozzleKey}
+                                        onMouseEnter={() => setHoveredNozzleId(nozzleKey)}
+                                        onMouseLeave={() => setHoveredNozzleId(null)}
+                                        className={`p-4 rounded-xl border transition-all duration-300 select-none ${isHighlighted
+                                          ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
+                                          : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
+                                          } ${nozzle.is_active === false ? 'opacity-65 bg-slate-105/50 border-slate-200' : ''}`}
+                                      >
+                                        <div className="space-y-3">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <input
+                                              type="text"
+                                              value={nozzle.name}
+                                              onChange={(e) => handleRenameNozzle(nozzleKey, e.target.value)}
+                                              className="text-xs font-bold text-slate-700 border border-slate-200 rounded px-2 py-1 w-full bg-white focus:outline-emerald-500"
+                                              placeholder="Nozzle Label"
+                                              disabled={nozzle.is_active === false}
+                                            />
+
+                                            <input
+                                              type="checkbox"
+                                              checked={nozzle.is_active !== false}
+                                              onChange={() => handleToggleNozzleActive(nozzleKey, nozzle.is_active !== false)}
+                                              className="accent-emerald-600 cursor-pointer shrink-0 w-3.5 h-3.5"
+                                              title="Toggle Nozzle Active Status"
+                                            />
+
+                                            <button
+                                              onClick={() => handleDeleteNozzle(nozzleKey)}
+                                              className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
+                                              title="Delete Nozzle"
+                                            >
+                                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                              </svg>
+                                            </button>
+                                          </div>
+
+                                          {nozzle.is_active !== false ? (
+                                            <>
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Tank Source</label>
+                                                <SmartDropdown
+                                                  value={nozzle.tank_id?.toString() || ''}
+                                                  onChange={(val) => handleReconnectNozzle(nozzleKey, val)}
+                                                  placeholder="-- Disconnected --"
+                                                  options={[
+                                                    { value: '', label: '-- Disconnected --' },
+                                                    ...draftTanks.map(t => ({
+                                                      value: (t.id || t.temp_id).toString(),
+                                                      label: `${t.name} (${t.product_name})`,
+                                                    }))
+                                                  ]}
+                                                  className="!rounded-lg !py-1.5"
+                                                />
+                                              </div>
+
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Base Meter Reading</label>
+                                                <input
+                                                  type="number"
+                                                  value={nozzle.opening_reading || 0}
+                                                  onChange={(e) => handleNozzleReadingChange(nozzleKey, parseFloat(e.target.value) || 0)}
+                                                  className="w-full text-xs border border-slate-200 rounded p-1.5 focus:outline-emerald-500"
+                                                  min="0"
+                                                  placeholder="Last shift closing reading"
+                                                />
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div className="text-[10px] text-slate-400 italic text-center py-2.5 font-bold bg-slate-100 rounded-lg border border-slate-200">
+                                              Inactive Nozzle
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
+                                  <button
+                                    onClick={() => handleAddNewNozzle(mach)}
+                                    className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                                    </svg>
+                                    Add Nozzle
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          onClick={handleAddMachine}
+                          className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                          </svg>
+                          Add Dispenser Unit
+                        </button>
+                      </div>
+
+                    </div>
+                  ) : (
+                    /* 3-column map layout when viewing */
+                    <div className={`grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch relative min-h-[480px] transition-all duration-300 ${pump?.is_active === false ? 'opacity-65 grayscale-[40%] pointer-events-none' : ''
+                      }`}>
+
+                      {/* 1. Storage Tanks Section (Left) */}
+                      <div className="lg:col-span-4 space-y-6 flex flex-col justify-center">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Underground Tanks
+                        </span>
+
+                        {tanks.map((tank) => {
+                          const productColors = getProductColor(tank.product_name || '');
+                          const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
+                          const isHighlighted = isTankHighlighted(tank.id);
+                          const varianceVal = parseFloat(tank.variance as any) || 0;
+
+                          return (
+                            <div
+                              key={tank.id}
+                              onMouseEnter={() => setHoveredTankId(tank.id)}
+                              onMouseLeave={() => setHoveredTankId(null)}
+                              className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
+                                ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
+                                : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
+                                }`}
+                            >
+                              <div className="flex justify-between items-start gap-3">
                                 <div>
                                   <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
                                   <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
@@ -1027,8 +1444,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                 )}
                               </div>
 
-                              {/* Center Level Fill cylinder */}
-                              <div className="flex-grow max-w-xl space-y-1.5 w-full">
+                              {/* Cylindrical Tank Meter */}
+                              <div className="mt-4 space-y-1.5">
                                 <div className="flex justify-between text-[10px] font-bold text-slate-400">
                                   <span>Level</span>
                                   <span>{fillPercent.toFixed(1)}% Filled</span>
@@ -1044,374 +1461,112 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                   </div>
                                 </div>
                               </div>
-
-                              {/* Tank configuration buttons */}
-                              <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
-                                <button
-                                  onClick={() => handleOpenEditTankModal(tank)}
-                                  className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
-                                  title="Edit Tank Details"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                  </svg>
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteTank(tank)}
-                                  className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                  title="Delete Tank"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
 
-                    <button
-                      onClick={handleOpenAddTankModal}
-                      className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      Add Storage Tank
-                    </button>
-                  </div>
+                      {/* 2. Interactive Flow Pipeline Column (Middle) */}
+                      <div className="hidden lg:col-span-3 lg:flex flex-col justify-around items-center py-10 relative select-none">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2 w-full text-center">
+                          Supply Lines
+                        </span>
 
-                  {/* Dispenser Units Section (Bottom Stack) */}
-                  <div className="space-y-4 pt-8 border-t border-slate-100">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Dispenser Units
-                    </span>
+                        <div className="flex flex-col gap-6 justify-center items-center w-full flex-grow">
+                          {tanks.map((tank) => {
+                            const isTankHovered = hoveredTankId === tank.id;
+                            const isNozzleConnecting = hoveredNozzleId !== null && nozzles.find(n => n.id === hoveredNozzleId)?.tank_id === tank.id;
+                            const isActive = isTankHovered || isNozzleConnecting;
+                            const colors = getProductColor(tank.product_name || '');
 
-                    <div className="grid grid-cols-1 gap-6">
-                      {draftMachines.map((mach) => {
-                        const machKey = mach.id || mach.temp_id;
-                        const machineNozzles = draftNozzles.filter(n => (mach.id && n.machine_id === mach.id) || (mach.temp_id && n.machine_temp_id === mach.temp_id));
-
-                        return (
-                          <div
-                            key={machKey}
-                            className="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm relative animate-fadeIn"
-                          >
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                              <input
-                                type="text"
-                                value={mach.name}
-                                onChange={(e) => handleRenameMachine(mach, e.target.value)}
-                                className="text-sm font-extrabold text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-grow bg-slate-50 focus:bg-white focus:outline-emerald-500 w-full"
+                            return (
+                              <div
+                                key={`line-${tank.id}`}
+                                className={`w-4/5 h-2.5 rounded-full transition-all duration-500 ${isActive
+                                  ? `${colors.bg} scale-y-150 shadow-lg ring-1 ring-white/50 animate-pulse`
+                                  : `${colors.bg} opacity-20 hover:opacity-40`
+                                  }`}
+                                title={`${tank.name} Pipeline (${tank.product_name})`}
                               />
+                            );
+                          })}
+                        </div>
+                      </div>
 
-                              <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
-                                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-500 cursor-pointer select-none shrink-0 border border-slate-200 rounded-lg px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 transition-colors shadow-sm">
-                                  <input
-                                    type="checkbox"
-                                    checked={mach.is_active !== false}
-                                    onChange={() => handleToggleMachineActive(machKey, mach.is_active !== false)}
-                                    className="accent-emerald-600 cursor-pointer"
-                                  />
-                                  <span>Active</span>
-                                </label>
+                      {/* 3. Forecourt Dispensers & Nozzles (Right) */}
+                      <div className="lg:col-span-5 space-y-6 flex flex-col justify-center">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Dispenser Units
+                        </span>
 
-                                <button
-                                  onClick={() => handleDeleteMachine(mach)}
-                                  className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                  title="Delete Dispenser"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
+                        {machines.map((mach) => {
+                          const machineNozzles = nozzles.filter(n => n.machine_id === mach.id);
 
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-                              {machineNozzles.map((nozzle) => {
-                                const nozzleKey = nozzle.id || nozzle.temp_id;
-                                const colors = getProductColor(nozzle.product_name || '');
-                                const isHighlighted = isNozzleHighlighted(nozzle);
+                          return (
+                            <div
+                              key={mach.id}
+                              className={`p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm transition-all duration-300 ${mach.is_active === false ? 'opacity-50 grayscale bg-slate-50 border-slate-200 shadow-none' : ''}`}
+                            >
+                              <h4 className="text-sm font-extrabold text-slate-800 mb-4 flex items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5">
+                                  <div className={`w-2.5 h-2.5 rounded-full ${mach.is_active === false ? 'bg-slate-300' : 'bg-emerald-500 shadow-sm shadow-emerald-500/25'}`} />
+                                  {mach.name}
+                                </div>
+                                {mach.is_active === false && (
+                                  <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-550 border border-slate-200 uppercase tracking-wider shrink-0 select-none">
+                                    Inactive Dispenser
+                                  </span>
+                                )}
+                              </h4>
 
-                                return (
-                                  <div
-                                    key={nozzleKey}
-                                    onMouseEnter={() => setHoveredNozzleId(nozzleKey)}
-                                    onMouseLeave={() => setHoveredNozzleId(null)}
-                                    className={`p-4 rounded-xl border transition-all duration-300 select-none ${isHighlighted
-                                      ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
-                                      : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
-                                      } ${nozzle.is_active === false ? 'opacity-65 bg-slate-105/50 border-slate-200' : ''}`}
-                                  >
-                                    <div className="space-y-3">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <input
-                                          type="text"
-                                          value={nozzle.name}
-                                          onChange={(e) => handleRenameNozzle(nozzleKey, e.target.value)}
-                                          className="text-xs font-bold text-slate-700 border border-slate-200 rounded px-2 py-1 w-full bg-white focus:outline-emerald-500"
-                                          placeholder="Nozzle Label"
-                                          disabled={nozzle.is_active === false}
-                                        />
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {machineNozzles.map((nozzle) => {
+                                  const colors = getProductColor(nozzle.product_name || '');
+                                  const isHighlighted = isNozzleHighlighted(nozzle);
 
-                                        <input
-                                          type="checkbox"
-                                          checked={nozzle.is_active !== false}
-                                          onChange={() => handleToggleNozzleActive(nozzleKey, nozzle.is_active !== false)}
-                                          className="accent-emerald-600 cursor-pointer shrink-0 w-3.5 h-3.5"
-                                          title="Toggle Nozzle Active Status"
-                                        />
-
-                                        <button
-                                          onClick={() => handleDeleteNozzle(nozzleKey)}
-                                          className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
-                                          title="Delete Nozzle"
-                                        >
-                                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                          </svg>
-                                        </button>
+                                  return (
+                                    <div
+                                      key={nozzle.id}
+                                      onMouseEnter={() => setHoveredNozzleId(nozzle.id)}
+                                      onMouseLeave={() => setHoveredNozzleId(null)}
+                                      className={`p-3.5 rounded-xl border transition-all duration-300 select-none ${isHighlighted
+                                        ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
+                                        : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
+                                        } ${nozzle.is_active === false ? 'opacity-50 grayscale bg-slate-100/50 cursor-not-allowed border-slate-200' : ''}`}
+                                    >
+                                      <div className="flex justify-between items-start">
+                                        <span className="text-xs font-bold text-slate-700">{nozzle.name}</span>
+                                        {nozzle.is_active === false ? (
+                                          <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-450 border border-slate-200 select-none font-sans">
+                                            Inactive
+                                          </span>
+                                        ) : (
+                                          <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded ${colors.text} ${colors.lightBg} border ${colors.border}`}>
+                                            {nozzle.product_name || 'Fuel'}
+                                          </span>
+                                        )}
                                       </div>
 
-                                      {nozzle.is_active !== false ? (
-                                        <>
-                                          <div className="space-y-1">
-                                            <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Tank Source</label>
-                                            <SmartDropdown
-                                              value={nozzle.tank_id?.toString() || ''}
-                                              onChange={(val) => handleReconnectNozzle(nozzleKey, val)}
-                                              placeholder="-- Disconnected --"
-                                              options={[
-                                                { value: '', label: '-- Disconnected --' },
-                                                ...draftTanks.map(t => ({
-                                                  value: (t.id || t.temp_id).toString(),
-                                                  label: `${t.name} (${t.product_name})`,
-                                                }))
-                                              ]}
-                                              className="!rounded-lg !py-1.5"
-                                            />
-                                          </div>
-
-                                          <div className="space-y-1">
-                                            <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Base Meter Reading</label>
-                                            <input
-                                              type="number"
-                                              value={nozzle.opening_reading || 0}
-                                              onChange={(e) => handleNozzleReadingChange(nozzleKey, parseFloat(e.target.value) || 0)}
-                                              className="w-full text-xs border border-slate-200 rounded p-1.5 focus:outline-emerald-500"
-                                              min="0"
-                                              placeholder="Last shift closing reading"
-                                            />
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <div className="text-[10px] text-slate-400 italic text-center py-2.5 font-bold bg-slate-100 rounded-lg border border-slate-200">
-                                          Inactive Nozzle
+                                      {nozzle.is_active !== false && (
+                                        <div className="mt-3 flex items-center justify-between text-[10px] text-slate-455">
+                                          <span className="font-extrabold text-slate-800">₹{parseFloat(nozzle.product_price as any || 0).toFixed(2)}/L</span>
                                         </div>
                                       )}
                                     </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-
-                            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
-                              <button
-                                onClick={() => handleAddNewNozzle(mach)}
-                                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                                </svg>
-                                Add Nozzle
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <button
-                      onClick={handleAddMachine}
-                      className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      Add Dispenser Unit
-                    </button>
-                  </div>
-
-                </div>
-              ) : (
-                /* 3-column map layout when viewing */
-                <div className={`grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch relative min-h-[480px] transition-all duration-300 ${pump?.is_active === false ? 'opacity-65 grayscale-[40%] pointer-events-none' : ''
-                  }`}>
-
-                  {/* 1. Storage Tanks Section (Left) */}
-                  <div className="lg:col-span-4 space-y-6 flex flex-col justify-center">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Underground Tanks
-                    </span>
-
-                    {tanks.map((tank) => {
-                      const productColors = getProductColor(tank.product_name || '');
-                      const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
-                      const isHighlighted = isTankHighlighted(tank.id);
-                      const varianceVal = parseFloat(tank.variance as any) || 0;
-
-                      return (
-                        <div
-                          key={tank.id}
-                          onMouseEnter={() => setHoveredTankId(tank.id)}
-                          onMouseLeave={() => setHoveredTankId(null)}
-                          className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
-                            ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
-                            : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
-                            }`}
-                        >
-                          <div className="flex justify-between items-start gap-3">
-                            <div>
-                              <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
-                              <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
-                                {tank.product_name}
-                              </span>
-                            </div>
-
-                            {varianceVal !== 0 && (
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${varianceVal > 0
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-250'
-                                : 'bg-rose-50 text-rose-700 border-rose-250'
-                                }`}>
-                                {varianceVal > 0 ? `+${varianceVal.toFixed(1)} L` : `${varianceVal.toFixed(1)} L`}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Cylindrical Tank Meter */}
-                          <div className="mt-4 space-y-1.5">
-                            <div className="flex justify-between text-[10px] font-bold text-slate-400">
-                              <span>Level</span>
-                              <span>{fillPercent.toFixed(1)}% Filled</span>
-                            </div>
-
-                            <div className="h-6 w-full rounded-lg bg-slate-100 border border-slate-200 overflow-hidden relative shadow-inner">
-                              <div
-                                className={`absolute top-0 bottom-0 left-0 rounded-r-md transition-all duration-700 ${productColors.bg}`}
-                                style={{ width: `${fillPercent}%` }}
-                              />
-                              <div className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-slate-700 mix-blend-difference tracking-wider font-sans">
-                                {parseFloat(tank.actual_dip_volume as any).toLocaleString()} / {parseFloat(tank.max_capacity as any).toLocaleString()} Ltrs
+                                  );
+                                })}
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          );
+                        })}
+                      </div>
 
-                  {/* 2. Interactive Flow Pipeline Column (Middle) */}
-                  <div className="hidden lg:col-span-3 lg:flex flex-col justify-around items-center py-10 relative select-none">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2 w-full text-center">
-                      Supply Lines
-                    </span>
-
-                    <div className="flex flex-col gap-6 justify-center items-center w-full flex-grow">
-                      {tanks.map((tank) => {
-                        const isTankHovered = hoveredTankId === tank.id;
-                        const isNozzleConnecting = hoveredNozzleId !== null && nozzles.find(n => n.id === hoveredNozzleId)?.tank_id === tank.id;
-                        const isActive = isTankHovered || isNozzleConnecting;
-                        const colors = getProductColor(tank.product_name || '');
-
-                        return (
-                          <div
-                            key={`line-${tank.id}`}
-                            className={`w-4/5 h-2.5 rounded-full transition-all duration-500 ${isActive
-                              ? `${colors.bg} scale-y-150 shadow-lg ring-1 ring-white/50 animate-pulse`
-                              : `${colors.bg} opacity-20 hover:opacity-40`
-                              }`}
-                            title={`${tank.name} Pipeline (${tank.product_name})`}
-                          />
-                        );
-                      })}
                     </div>
-                  </div>
-
-                  {/* 3. Forecourt Dispensers & Nozzles (Right) */}
-                  <div className="lg:col-span-5 space-y-6 flex flex-col justify-center">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Dispenser Units
-                    </span>
-
-                    {machines.map((mach) => {
-                      const machineNozzles = nozzles.filter(n => n.machine_id === mach.id);
-
-                      return (
-                        <div
-                          key={mach.id}
-                          className={`p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm transition-all duration-300 ${mach.is_active === false ? 'opacity-50 grayscale bg-slate-50 border-slate-200 shadow-none' : ''}`}
-                        >
-                          <h4 className="text-sm font-extrabold text-slate-800 mb-4 flex items-center justify-between gap-1.5">
-                            <div className="flex items-center gap-1.5">
-                              <div className={`w-2.5 h-2.5 rounded-full ${mach.is_active === false ? 'bg-slate-300' : 'bg-emerald-500 shadow-sm shadow-emerald-500/25'}`} />
-                              {mach.name}
-                            </div>
-                            {mach.is_active === false && (
-                              <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-550 border border-slate-200 uppercase tracking-wider shrink-0 select-none">
-                                Inactive Dispenser
-                              </span>
-                            )}
-                          </h4>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {machineNozzles.map((nozzle) => {
-                              const colors = getProductColor(nozzle.product_name || '');
-                              const isHighlighted = isNozzleHighlighted(nozzle);
-
-                              return (
-                                <div
-                                  key={nozzle.id}
-                                  onMouseEnter={() => setHoveredNozzleId(nozzle.id)}
-                                  onMouseLeave={() => setHoveredNozzleId(null)}
-                                  className={`p-3.5 rounded-xl border transition-all duration-300 select-none ${isHighlighted
-                                    ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
-                                    : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
-                                    } ${nozzle.is_active === false ? 'opacity-50 grayscale bg-slate-100/50 cursor-not-allowed border-slate-200' : ''}`}
-                                >
-                                  <div className="flex justify-between items-start">
-                                    <span className="text-xs font-bold text-slate-700">{nozzle.name}</span>
-                                    {nozzle.is_active === false ? (
-                                      <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-450 border border-slate-200 select-none font-sans">
-                                        Inactive
-                                      </span>
-                                    ) : (
-                                      <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded ${colors.text} ${colors.lightBg} border ${colors.border}`}>
-                                        {nozzle.product_name || 'Fuel'}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {nozzle.is_active !== false && (
-                                    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-455">
-                                      <span className="font-extrabold text-slate-800">₹{parseFloat(nozzle.product_price as any || 0).toFixed(2)}/L</span>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 

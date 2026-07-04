@@ -139,11 +139,12 @@ def get_pump_config(pump_id: int, db: Session = Depends(get_db)):
                 "id": n.id,
                 "machine_id": n.machine_id,
                 "tank_id": n.tank_id,
+                "product_id": n.tank.product_id if n.tank else None,
                 "name": n.name,
                 "is_active": n.is_active,
-                "tank_name": n.tank.name,
-                "product_name": n.tank.product.name,
-                "product_price": float(n.tank.product.current_price),
+                "tank_name": n.tank.name if n.tank else "Unknown Tank",
+                "product_name": n.tank.product.name if (n.tank and n.tank.product) else "Unknown Product",
+                "product_price": float(n.tank.product.current_price) if (n.tank and n.tank.product) else 0.0,
                 "opening_reading": opening_reading
             })
             

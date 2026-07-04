@@ -7,6 +7,10 @@ class CreditTransactionType(str, enum.Enum):
     CHARGE = "CHARGE"
     PAYMENT = "PAYMENT"
 
+class PaymentMethodType(str, enum.Enum):
+    CASH = "CASH"
+    ACCOUNT_TRANSFER = "ACCOUNT_TRANSFER"
+
 class CreditAccount(Base):
     __tablename__ = "credit_accounts"
 
@@ -25,11 +29,16 @@ class CreditTransaction(Base):
 
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     account_id = Column(Integer, ForeignKey("credit_accounts.id"), nullable=False)
+    session_id = Column(BigInteger, ForeignKey("daily_log_sessions.id"), nullable=True)
     log_date = Column(Date, nullable=False)
     log_timestamp = Column(DateTime(timezone=True), nullable=False)
     type = Column(SQLEnum(CreditTransactionType, name="credit_transaction_type"), nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
     notes = Column(String, nullable=True)
+    payment_method = Column(SQLEnum(PaymentMethodType, native_enum=False), nullable=True)
+
 
     # Relationships
     account = relationship("CreditAccount", back_populates="transactions")
+    session = relationship("DailyLogSession", back_populates="credit_transactions")
+

@@ -30,6 +30,7 @@ export interface Nozzle {
   id: number;
   machine_id: number;
   tank_id: number;
+  product_id?: number;
   name: string;
   is_active: boolean;
   tank_name?: string;
@@ -59,6 +60,7 @@ export interface CreditTransaction {
   log_timestamp: string;
   type: 'CHARGE' | 'PAYMENT';
   amount: number;
+  payment_method?: 'CASH' | 'ACCOUNT_TRANSFER';
   notes: string | null;
 }
 
@@ -435,7 +437,7 @@ export const apiService = {
    */
   async recordCreditTransaction(
     accountId: number,
-    data: { account_id: number; log_date: string; log_timestamp: string; type: 'CHARGE' | 'PAYMENT'; amount: number; notes?: string }
+    data: { account_id: number; log_date: string; log_timestamp: string; type: 'CHARGE' | 'PAYMENT'; amount: number; payment_method?: 'CASH' | 'ACCOUNT_TRANSFER'; notes?: string }
   ): Promise<CreditTransaction> {
     const response = await fetch(`${API_BASE_URL}/credit/accounts/${accountId}/transactions`, {
       method: 'POST',
@@ -448,5 +450,203 @@ export const apiService = {
     }
     return await response.json();
   },
+
+  // ==================== Daily Log Sessions ====================
+
+  /**
+   * Get or create a daily log session.
+   */
+  async getOrCreateSession(pumpId: number, dateStr?: string): Promise<any> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/session/${pumpId}?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/session/${pumpId}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to retrieve session: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Get today's session summary status.
+   */
+  async getSessionSummary(pumpId: number, dateStr?: string): Promise<any> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/session/${pumpId}/summary?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/session/${pumpId}/summary`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch session summary: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Reopen a closed session.
+   */
+  async reopenSession(sessionId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/reopen`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to re-open session: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save all nozzle readings.
+   */
+  async saveNozzleReadings(sessionId: number, readings: any[]): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/nozzle-readings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readings),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save nozzle readings: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save all tank dip readings.
+   */
+  async saveTankReadings(sessionId: number, readings: any[]): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/tank-readings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readings),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save tank readings: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Add a single credit charge transaction.
+   */
+  async addCreditCharge(sessionId: number, accountId: number, amount: number, notes?: string): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/credit-charge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId, amount, notes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to add credit sale: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete a credit charge transaction.
+   */
+  async deleteCreditCharge(sessionId: number, txId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/credit-charge/${txId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete credit sale: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Add a single credit payment transaction.
+   */
+  async addCreditPayment(sessionId: number, accountId: number, amount: number, paymentMethod: string, notes?: string): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/credit-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId, amount, payment_method: paymentMethod, notes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to record payment received: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete a credit payment transaction.
+   */
+  async deleteCreditPayment(sessionId: number, txId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/credit-payment/${txId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete payment transaction: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save miscellaneous income.
+   */
+  async saveMiscIncome(sessionId: number, miscCash: number, miscDigital: number, miscNotes?: string): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/misc`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ misc_cash: miscCash, misc_digital: miscDigital, misc_notes: miscNotes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save miscellaneous income: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Close log session.
+   */
+  async closeSession(sessionId: number, fuelCash: number, fuelDigital: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fuel_cash_collected: fuelCash, fuel_digital_collected: fuelDigital }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to finalize daily session close: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Get log status for all pumps.
+   */
+  async getBulkLogStatus(dateStr?: string): Promise<Record<number, string>> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/log-status?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/log-status`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch bulk log status: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Fetch prefill data for shift logs (opening readings, dip volumes, rates).
+   */
+  async prefillShiftLog(pumpId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/operations/prefill/${pumpId}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch prefill details: ${response.statusText}`);
+    }
+    return await response.json();
+  },
 };
+
 

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel
@@ -12,16 +12,60 @@ from app.models.fuel_pump import FuelPump
 from app.models.machine import Machine, Nozzle
 from app.models.tank import Tank
 from app.models.product import Product, ProductPriceHistory
-from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog
-from app.models.credit import CreditAccount, CreditTransaction, CreditTransactionType
+from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog, DailyLogSession, DailyLogSessionStatus
+from app.models.credit import CreditAccount, CreditTransaction, CreditTransactionType, PaymentMethodType
 from app.schemas.timezone_helper import localize_datetime
+from app.schemas.log import (
+    DailyNozzleLogResponse,
+    DailyTankLogResponse,
+    DailyLogSessionResponse,
+    DailyLogSessionDetailResponse
+)
+from app.schemas.credit import CreditTransactionResponse
 
 IST = ZoneInfo("Asia/Kolkata")
 
 router = APIRouter(prefix="/operations", tags=["Daily Operations & Shift Logs"])
 
-# --- Request/Response Pydantic Schemas ---
+# --- Request Pydantic Schemas ---
 
+class NozzleReadingEntry(BaseModel):
+    closing_reading: Decimal
+    product_price: Decimal
+    is_reset: bool = False
+
+class NozzleReadingsSave(BaseModel):
+    nozzle_id: int
+    entries: List[NozzleReadingEntry]
+
+class TankReadingsSave(BaseModel):
+    tank_id: int
+    testing_liters: Decimal = Decimal("0.0")
+    fuel_received: Decimal = Decimal("0.0")
+    actual_dip_volume: Decimal
+
+class CreditChargeCreate(BaseModel):
+    account_id: int
+    amount: Decimal
+    notes: Optional[str] = None
+
+class CreditPaymentCreate(BaseModel):
+    account_id: int
+    amount: Decimal
+    payment_method: str  # "CASH" or "ACCOUNT_TRANSFER"
+    notes: Optional[str] = None
+
+class MiscSave(BaseModel):
+    misc_cash: Decimal = Decimal("0.0")
+    misc_digital: Decimal = Decimal("0.0")
+    misc_notes: Optional[str] = None
+
+
+class CloseSessionRequest(BaseModel):
+    fuel_cash_collected: Decimal
+    fuel_digital_collected: Decimal
+
+# Legacy Request Schemas
 class NozzleLogEntry(BaseModel):
     nozzle_id: int
     closing_reading: Decimal
@@ -74,17 +118,7 @@ class PrefillResponse(BaseModel):
 # --- Helper Functions ---
 
 def get_historical_price_and_margin(db: Session, product_id: int, timestamp: datetime):
-    """Retrieve the price and margin valid at the given timestamp from history, fallback to current values."""
-    hist = db.query(ProductPriceHistory).filter(
-        ProductPriceHistory.product_id == product_id,
-        ProductPriceHistory.valid_from <= timestamp
-    ).filter(
-        (ProductPriceHistory.valid_to == None) | (ProductPriceHistory.valid_to > timestamp)
-    ).order_by(ProductPriceHistory.valid_from.desc()).first()
-
-    if hist:
-        return hist.selling_price, hist.cost_margin
-    
+    """Retrieve the current price and margin for the product directly from the database."""
     product = db.query(Product).filter(Product.id == product_id).first()
     if product:
         return product.current_price, product.current_margin
@@ -106,12 +140,20 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
     if not pump:
         raise HTTPException(status_code=404, detail="Fuel Pump not found")
 
-    # 1. Fetch yesterday's closing cash
-    prev_fin_log = db.query(DailyFinancialLog).filter(
-        DailyFinancialLog.pump_id == pump_id,
-        DailyFinancialLog.log_timestamp < log_timestamp
-    ).order_by(DailyFinancialLog.log_timestamp.desc()).first()
-    opening_cash_balance = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
+    # 1. Fetch yesterday's closing cash (first search new sessions, fallback to legacy logs)
+    prev_session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date < log_date
+    ).order_by(DailyLogSession.log_date.desc()).first()
+    
+    if prev_session:
+        opening_cash_balance = prev_session.closing_cash_balance if prev_session.closing_cash_balance is not None else Decimal("0.0")
+    else:
+        prev_fin_log = db.query(DailyFinancialLog).filter(
+            DailyFinancialLog.pump_id == pump_id,
+            DailyFinancialLog.log_date < log_date
+        ).order_by(DailyFinancialLog.log_date.desc()).first()
+        opening_cash_balance = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
 
     # 2. Fetch nozzles and their opening meter readings
     prefill_nozzles = []
@@ -122,11 +164,12 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
             if not nozzle.is_active:
                 continue
             
-            # Yesterday's closing reading
+            # Yesterday's closing reading (new session logs first, fallback to legacy)
             prev_nozzle_log = db.query(DailyNozzleLog).filter(
                 DailyNozzleLog.nozzle_id == nozzle.id,
-                DailyNozzleLog.log_timestamp < log_timestamp
-            ).order_by(DailyNozzleLog.log_timestamp.desc()).first()
+                DailyNozzleLog.log_date < log_date
+            ).order_by(DailyNozzleLog.log_date.desc(), DailyNozzleLog.entry_index.desc()).first()
+            
             opening_reading = prev_nozzle_log.closing_reading if prev_nozzle_log else Decimal("0.0")
 
             # Active product price
@@ -148,9 +191,10 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
         # Yesterday's closing dip volume
         prev_tank_log = db.query(DailyTankLog).filter(
             DailyTankLog.tank_id == tank.id,
-            DailyTankLog.log_timestamp < log_timestamp
-        ).order_by(DailyTankLog.log_timestamp.desc()).first()
-        opening_dip_volume = prev_tank_log.actual_dip_volume if prev_tank_log else Decimal("0.0")
+            DailyTankLog.log_date < log_date
+        ).order_by(DailyTankLog.log_date.desc()).first()
+        
+        opening_dip_volume = prev_tank_log.actual_dip_volume if prev_tank_log else tank.actual_dip_volume
 
         prefill_tanks.append(PrefillTankResponse(
             tank_id=tank.id,
@@ -168,207 +212,579 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
         tanks=prefill_tanks
     )
 
-@router.post("/submit/{pump_id}", status_code=status.HTTP_201_CREATED)
-def submit_shift_log(pump_id: int, req: ShiftSubmitRequest, db: Session = Depends(get_db)):
-    """Submits the daily shift logs, performs reconciliations, and updates balances in a single atomic transaction."""
+
+# --- New Session Endpoints ---
+
+@router.get("/session/{pump_id}", response_model=DailyLogSessionDetailResponse)
+def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Session = Depends(get_db)):
+    """Retrieves or creates a daily log session for the pump for the specified date (default today)."""
+    if date_str:
+        try:
+            log_date = date.fromisoformat(date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    else:
+        log_date = datetime.now(IST).date()
+
     pump = db.query(FuelPump).filter(FuelPump.id == pump_id, FuelPump.is_active == True).first()
     if not pump:
-        raise HTTPException(status_code=404, detail="Fuel pump not found")
+        raise HTTPException(status_code=404, detail="Active fuel pump not found")
 
-    # Ensure no duplicate log for the same pump and timestamp
-    existing_financial = db.query(DailyFinancialLog).filter(
-        DailyFinancialLog.pump_id == pump_id,
-        DailyFinancialLog.log_timestamp == req.log_timestamp
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date == log_date
     ).first()
-    if existing_financial:
-        raise HTTPException(
-            status_code=400,
-            detail=f"A shift log has already been submitted for this pump at timestamp {req.log_timestamp}."
-        )
 
-    # Validate credit sales sum matches credit_sales_logged
-    credit_sales_sum = sum(cs.amount for cs in req.credit_sales)
-    if req.credit_sales_logged != credit_sales_sum:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Credit sales sum ({credit_sales_sum}) does not match credit_sales_logged ({req.credit_sales_logged})"
-        )
+    if session:
+        return session
 
-    # 1. Map request logs for easy lookup
-    req_nozzles = {nl.nozzle_id: nl for nl in req.nozzle_logs}
-    req_tanks = {tl.tank_id: tl for tl in req.tank_logs}
+    # Get opening cash balance from last created session
+    last_session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date < log_date
+    ).order_by(DailyLogSession.log_date.desc()).first()
 
-    # Track nozzle sold quantities per tank to calculate book stock
-    tank_dispensed = {tank.id: Decimal("0.0") for tank in pump.tanks}
-    nozzle_prices = {}
+    if last_session:
+        opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else Decimal("0.0")
+    else:
+        # Fallback to legacy logs
+        prev_fin_log = db.query(DailyFinancialLog).filter(
+            DailyFinancialLog.pump_id == pump_id,
+            DailyFinancialLog.log_date < log_date
+        ).order_by(DailyFinancialLog.log_date.desc()).first()
+        opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
 
-    # Process Nozzle Logs
-    for machine in pump.machines:
-        if not machine.is_active:
-            continue
-        for nozzle in machine.nozzles:
-            if not nozzle.is_active:
-                continue
+    # Create new session
+    session = DailyLogSession(
+        pump_id=pump_id,
+        log_date=log_date,
+        status=DailyLogSessionStatus.OPEN,
+        opened_at=datetime.now(IST),
+        opening_cash_balance=opening_cash,
+        misc_cash=Decimal("0.0"),
+        misc_digital=Decimal("0.0")
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
 
-            if nozzle.id not in req_nozzles:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Missing reading input for Nozzle: {nozzle.name} (ID: {nozzle.id})"
-                )
+@router.get("/session/{pump_id}/summary")
+def get_session_summary(pump_id: int, date_str: Optional[str] = None, db: Session = Depends(get_db)):
+    """Lightweight endpoint returning logged status of each section for today."""
+    if date_str:
+        log_date = date.fromisoformat(date_str)
+    else:
+        log_date = datetime.now(IST).date()
 
-            log_entry = req_nozzles[nozzle.id]
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date == log_date
+    ).first()
 
-            # Fetch previous reading
-            prev_log = db.query(DailyNozzleLog).filter(
-                DailyNozzleLog.nozzle_id == nozzle.id,
-                DailyNozzleLog.log_timestamp < req.log_timestamp
-            ).order_by(DailyNozzleLog.log_timestamp.desc()).first()
-            opening_reading = prev_log.closing_reading if prev_log else Decimal("0.0")
+    if not session:
+        return {
+            "status": "NOT_LOGGED",
+            "session_id": None,
+            "nozzle_readings_logged": False,
+            "tank_readings_logged": False,
+            "credit_sales_count": 0,
+            "credit_payments_count": 0,
+            "misc_logged": False
+        }
 
+    nozzle_count = db.query(func.count(DailyNozzleLog.id)).filter(DailyNozzleLog.session_id == session.id).scalar()
+    tank_count = db.query(func.count(DailyTankLog.id)).filter(DailyTankLog.session_id == session.id).scalar()
+    
+    credit_sales_count = db.query(func.count(CreditTransaction.id)).filter(
+        CreditTransaction.session_id == session.id,
+        CreditTransaction.type == CreditTransactionType.CHARGE
+    ).scalar()
+
+    credit_payments_count = db.query(func.count(CreditTransaction.id)).filter(
+        CreditTransaction.session_id == session.id,
+        CreditTransaction.type == CreditTransactionType.PAYMENT
+    ).scalar()
+
+    misc_logged = (session.misc_cash > 0 or session.misc_digital > 0 or session.misc_notes is not None)
+
+    return {
+        "status": session.status,
+        "session_id": session.id,
+        "nozzle_readings_logged": nozzle_count > 0,
+        "tank_readings_logged": tank_count > 0,
+        "credit_sales_count": credit_sales_count,
+        "credit_payments_count": credit_payments_count,
+        "misc_logged": misc_logged
+    }
+
+@router.post("/session/{session_id}/reopen")
+def reopen_session(session_id: int, db: Session = Depends(get_db)):
+    """Re-opens a closed session. Only permitted for today's date in IST."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    today = datetime.now(IST).date()
+    if session.log_date != today:
+        raise HTTPException(status_code=400, detail="Only today's logging session can be re-opened.")
+
+    session.status = DailyLogSessionStatus.OPEN
+    session.closed_at = None
+    db.commit()
+    return {"status": "success", "message": "Session re-opened successfully"}
+
+@router.put("/session/{session_id}/nozzle-readings")
+def save_nozzle_readings(session_id: int, readings: List[NozzleReadingsSave], db: Session = Depends(get_db)):
+    """Atomically replaces all nozzle readings for this session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit readings for a closed session")
+
+    # Delete existing nozzle readings for this session
+    db.query(DailyNozzleLog).filter(DailyNozzleLog.session_id == session_id).delete()
+
+    for r in readings:
+        nozzle = db.query(Nozzle).filter(Nozzle.id == r.nozzle_id).first()
+        if not nozzle:
+            raise HTTPException(status_code=404, detail=f"Nozzle {r.nozzle_id} not found")
+
+        # Establish base opening reading
+        prev_log = db.query(DailyNozzleLog).join(DailyLogSession).filter(
+            DailyNozzleLog.nozzle_id == r.nozzle_id,
+            DailyLogSession.log_date < session.log_date
+        ).order_by(DailyLogSession.log_date.desc(), DailyNozzleLog.entry_index.desc()).first()
+
+        opening_reading = prev_log.closing_reading if prev_log else Decimal("0.0")
+
+        for idx, entry in enumerate(r.entries):
             # Check rollover logic
-            if log_entry.closing_reading < opening_reading:
-                if not log_entry.is_reset:
+            if entry.closing_reading < opening_reading:
+                if not entry.is_reset:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Meter rollover/reset detected on Nozzle {nozzle.name}. "
-                               f"Closing reading ({log_entry.closing_reading}) is less than opening reading ({opening_reading}). "
-                               f"Please confirm rollover override."
+                        detail=f"Rollover detected on Nozzle {nozzle.name}. Closing {entry.closing_reading} < Opening {opening_reading}."
                     )
-                # If override is active, gross liters is exactly the closing reading
-                gross_liters_sold = log_entry.closing_reading
+                gross = entry.closing_reading
             else:
-                gross_liters_sold = log_entry.closing_reading - opening_reading
+                gross = entry.closing_reading - opening_reading
 
-            # Save nozzle log
-            db_nozzle_log = DailyNozzleLog(
-                nozzle_id=nozzle.id,
-                log_date=req.log_date,
-                log_timestamp=req.log_timestamp,
+            db_log = DailyNozzleLog(
+                session_id=session_id,
+                nozzle_id=r.nozzle_id,
+                entry_index=idx,
+                product_price=entry.product_price,
+                log_date=session.log_date,
+                log_timestamp=datetime.now(IST),
                 opening_reading=opening_reading,
-                closing_reading=log_entry.closing_reading,
-                is_reset=log_entry.is_reset,
-                gross_liters_sold=gross_liters_sold
+                closing_reading=entry.closing_reading,
+                is_reset=entry.is_reset,
+                gross_liters_sold=gross
             )
-            db.add(db_nozzle_log)
-
-            # Store mapping to calculate expected revenue and tank volumes
-            tank_dispensed[nozzle.tank_id] = tank_dispensed.get(nozzle.tank_id, Decimal("0.0")) + gross_liters_sold
-            
-            # Get pricing active at log_timestamp
-            price, _ = get_historical_price_and_margin(db, nozzle.tank.product_id, req.log_timestamp)
-            nozzle_prices[nozzle.id] = (gross_liters_sold, price)
-
-    # Process Tank Logs
-    for tank in pump.tanks:
-        if tank.id not in req_tanks:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Missing inventory logs for Tank: {tank.name} (ID: {tank.id})"
-            )
-
-        tank_entry = req_tanks[tank.id]
-
-        # Fetch previous tank log to establish the opening physical stock baseline
-        prev_tank_log = db.query(DailyTankLog).filter(
-            DailyTankLog.tank_id == tank.id,
-            DailyTankLog.log_timestamp < req.log_timestamp
-        ).order_by(DailyTankLog.log_timestamp.desc()).first()
-        
-        if prev_tank_log:
-            # Baseline is yesterday's actual physical closing stock (dip volume)
-            yesterday_physical_stock = prev_tank_log.actual_dip_volume
-        else:
-            yesterday_physical_stock = Decimal("0.0")
-
-        # Book Stock Calculation
-        # Expected Book Stock = Yesterday's Physical Stock + Fuel Received - Gross Dispensed + Testing Liters (poured back)
-        sum_gross_nozzles = tank_dispensed.get(tank.id, Decimal("0.0"))
-        expected_book_stock = yesterday_physical_stock + tank_entry.fuel_received - sum_gross_nozzles + tank_entry.testing_liters
-
-        # Calculate Variance
-        calculated_variance = tank_entry.actual_dip_volume - expected_book_stock
-
-        db_tank_log = DailyTankLog(
-            tank_id=tank.id,
-            log_date=req.log_date,
-            log_timestamp=req.log_timestamp,
-            testing_liters=tank_entry.testing_liters,
-            fuel_received=tank_entry.fuel_received,
-            actual_dip_volume=tank_entry.actual_dip_volume,
-            calculated_variance=calculated_variance
-        )
-        db.add(db_tank_log)
-
-    # 3. Calculate Financials
-    # Expected Revenue = sum(Nozzle Gross Liters * Nozzle Product Price) - sum(Tank Testing Liters * Tank Product Price)
-    gross_nozzle_revenue = sum(gross * price for gross, price in nozzle_prices.values())
-    
-    testing_deductions = Decimal("0.0")
-    for tank in pump.tanks:
-        tank_entry = req_tanks[tank.id]
-        if tank_entry.testing_liters > 0:
-            # Price of the product in this tank
-            price, _ = get_historical_price_and_margin(db, tank.product_id, req.log_timestamp)
-            testing_deductions += tank_entry.testing_liters * price
-
-    expected_revenue = gross_nozzle_revenue - testing_deductions
-
-    # Shortage/Overage
-    total_reported = req.cash_collected + req.digital_collected + req.credit_sales_logged
-    shortage_overage = total_reported - expected_revenue
-
-    # Fetch previous closing cash
-    prev_fin_log = db.query(DailyFinancialLog).filter(
-        DailyFinancialLog.pump_id == pump_id,
-        DailyFinancialLog.log_timestamp < req.log_timestamp
-    ).order_by(DailyFinancialLog.log_timestamp.desc()).first()
-    opening_cash_balance = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
-    closing_cash_balance = opening_cash_balance + req.cash_collected
-
-    db_financial_log = DailyFinancialLog(
-        pump_id=pump_id,
-        log_date=req.log_date,
-        log_timestamp=req.log_timestamp,
-        opening_cash_balance=opening_cash_balance,
-        expected_revenue=expected_revenue,
-        cash_collected=req.cash_collected,
-        digital_collected=req.digital_collected,
-        credit_sales_logged=req.credit_sales_logged,
-        closing_cash_balance=closing_cash_balance,
-        shortage_overage=shortage_overage
-    )
-    db.add(db_financial_log)
-
-    # 4. Handle Credit Transactions
-    for cs in req.credit_sales:
-        account = db.query(CreditAccount).filter(CreditAccount.id == cs.account_id, CreditAccount.pump_id == pump_id).first()
-        if not account:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Credit account ID {cs.account_id} not found or doesn't belong to this pump."
-            )
-
-        db_tx = CreditTransaction(
-            account_id=cs.account_id,
-            log_date=req.log_date,
-            log_timestamp=req.log_timestamp,
-            type=CreditTransactionType.CHARGE,
-            amount=cs.amount,
-            notes=cs.notes or f"Daily credit sales on shift {req.log_date}"
-        )
-        db.add(db_tx)
-        account.current_outstanding_balance += cs.amount
+            db.add(db_log)
+            # Opening reading for next index is current closing reading
+            opening_reading = entry.closing_reading
 
     db.commit()
+    return {"status": "success", "message": "Nozzle readings saved successfully"}
+
+@router.put("/session/{session_id}/tank-readings")
+def save_tank_readings(session_id: int, readings: List[TankReadingsSave], db: Session = Depends(get_db)):
+    """Atomically replaces all tank dip readings for this session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit readings for a closed session")
+
+    # Delete existing tank logs for this session
+    db.query(DailyTankLog).filter(DailyTankLog.session_id == session_id).delete()
+
+    # Get nozzles and their gross dispensed quantities in this session to calculate variance
+    nozzle_logs = db.query(DailyNozzleLog).filter(DailyNozzleLog.session_id == session_id).all()
+    nozzle_dispensed = {} # nozzle_id -> gross_liters
+    for nl in nozzle_logs:
+        nozzle_dispensed[nl.nozzle_id] = nozzle_dispensed.get(nl.nozzle_id, Decimal("0.0")) + nl.gross_liters_sold
+
+    for r in readings:
+        tank = db.query(Tank).filter(Tank.id == r.tank_id).first()
+        if not tank:
+            raise HTTPException(status_code=404, detail=f"Tank {r.tank_id} not found")
+
+        # Get previous dip volume
+        prev_log = db.query(DailyTankLog).join(DailyLogSession).filter(
+            DailyTankLog.tank_id == r.tank_id,
+            DailyLogSession.log_date < session.log_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
+        opening_dip = prev_log.actual_dip_volume if prev_log else tank.actual_dip_volume
+
+        # Compute total gross sold from nozzles connected to this tank in this session
+        gross_sold = Decimal("0.0")
+        for nozzle in tank.nozzles:
+            gross_sold += nozzle_dispensed.get(nozzle.id, Decimal("0.0"))
+
+        book_stock = opening_dip + r.fuel_received - gross_sold + r.testing_liters
+        variance = r.actual_dip_volume - book_stock
+
+        db_log = DailyTankLog(
+            session_id=session_id,
+            tank_id=r.tank_id,
+            log_date=session.log_date,
+            log_timestamp=datetime.now(IST),
+            testing_liters=r.testing_liters,
+            fuel_received=r.fuel_received,
+            actual_dip_volume=r.actual_dip_volume,
+            calculated_variance=variance
+        )
+        db.add(db_log)
+
+    db.commit()
+    return {"status": "success", "message": "Tank readings saved successfully"}
+
+@router.post("/session/{session_id}/credit-charge", response_model=CreditTransactionResponse)
+def add_session_credit_charge(session_id: int, req: CreditChargeCreate, db: Session = Depends(get_db)):
+    """Records a single B2B credit sale charge linked to the session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    account = db.query(CreditAccount).filter(CreditAccount.id == req.account_id, CreditAccount.pump_id == session.pump_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Credit account not found or mismatch")
+
+    tx = CreditTransaction(
+        account_id=req.account_id,
+        session_id=session_id,
+        log_date=session.log_date,
+        log_timestamp=datetime.now(IST),
+        type=CreditTransactionType.CHARGE,
+        amount=req.amount,
+        notes=req.notes
+    )
+    db.add(tx)
+    account.current_outstanding_balance += req.amount
+    db.commit()
+    db.refresh(tx)
+    return tx
+
+@router.delete("/session/{session_id}/credit-charge/{tx_id}")
+def delete_session_credit_charge(session_id: int, tx_id: int, db: Session = Depends(get_db)):
+    """Removes a linked B2B credit charge from the session, reversing the account balance change."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    tx = db.query(CreditTransaction).filter(
+        CreditTransaction.id == tx_id,
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.CHARGE
+    ).first()
+
+    if not tx:
+        raise HTTPException(status_code=404, detail="Credit charge transaction not found in this session")
+
+    account = tx.account
+    account.current_outstanding_balance -= tx.amount
+    db.delete(tx)
+    db.commit()
+    return {"status": "success", "message": "Credit charge removed"}
+
+@router.post("/session/{session_id}/credit-payment", response_model=CreditTransactionResponse)
+def add_session_credit_payment(session_id: int, req: CreditPaymentCreate, db: Session = Depends(get_db)):
+    """Records a B2B client credit payment received linked to the session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    account = db.query(CreditAccount).filter(CreditAccount.id == req.account_id, CreditAccount.pump_id == session.pump_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Credit account not found or mismatch")
+
+    if req.payment_method not in ["CASH", "ACCOUNT_TRANSFER"]:
+        raise HTTPException(status_code=400, detail="Invalid payment method. Use CASH or ACCOUNT_TRANSFER.")
+
+    tx = CreditTransaction(
+        account_id=req.account_id,
+        session_id=session_id,
+        log_date=session.log_date,
+        log_timestamp=datetime.now(IST),
+        type=CreditTransactionType.PAYMENT,
+        amount=req.amount,
+        payment_method=PaymentMethodType(req.payment_method),
+        notes=req.notes
+    )
+    db.add(tx)
+    account.current_outstanding_balance -= req.amount
+    db.commit()
+    db.refresh(tx)
+    return tx
+
+@router.delete("/session/{session_id}/credit-payment/{tx_id}")
+def delete_session_credit_payment(session_id: int, tx_id: int, db: Session = Depends(get_db)):
+    """Removes a linked B2B payment transaction from the session, reversing the account balance change."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    tx = db.query(CreditTransaction).filter(
+        CreditTransaction.id == tx_id,
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.PAYMENT
+    ).first()
+
+    if not tx:
+        raise HTTPException(status_code=404, detail="Credit payment transaction not found in this session")
+
+    account = tx.account
+    account.current_outstanding_balance += tx.amount
+    db.delete(tx)
+    db.commit()
+    return {"status": "success", "message": "Credit payment removed"}
+
+@router.put("/session/{session_id}/misc")
+def save_session_misc(session_id: int, req: MiscSave, db: Session = Depends(get_db)):
+    """Saves miscellaneous income totals for the daily session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    session.misc_cash = req.misc_cash
+    session.misc_digital = req.misc_digital
+    session.misc_notes = req.misc_notes
+    db.commit()
+    return {"status": "success", "message": "Miscellaneous income totals saved"}
+
+@router.post("/session/{session_id}/close")
+def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depends(get_db)):
+    """Atomically computes reconciliation calculations, updates tank baselines, and closes the session."""
+    session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail="Session is already closed")
+
+    # 1. Validation check - Nozzle and Tank logs must exist
+    nozzle_logs = db.query(DailyNozzleLog).filter(DailyNozzleLog.session_id == session_id).all()
+    tank_logs = db.query(DailyTankLog).filter(DailyTankLog.session_id == session_id).all()
+
+    if not nozzle_logs:
+        raise HTTPException(status_code=400, detail="Cannot close day: Nozzle readings must be saved first.")
+    if not tank_logs:
+        raise HTTPException(status_code=400, detail="Cannot close day: Tank dip volumes must be saved first.")
+
+    # 2. Expected revenue calculation
+    # Expected Revenue = sum(nozzle gross * price) - sum(tank testing liters * price at timestamp)
+    expected_revenue = Decimal("0.0")
+    for nl in nozzle_logs:
+        expected_revenue += nl.gross_liters_sold * nl.product_price
+
+    # Deduct testing liters
+    testing_deductions = Decimal("0.0")
+    for tl in tank_logs:
+        if tl.testing_liters > 0:
+            price, _ = get_historical_price_and_margin(db, tl.tank.product_id, tl.log_timestamp)
+            testing_deductions += tl.testing_liters * price
+            
+    expected_revenue -= testing_deductions
+
+    # 3. Sum credit sales charges logged today
+    credit_sales_total = db.query(func.sum(CreditTransaction.amount)).filter(
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.CHARGE
+    ).scalar() or Decimal("0.0")
+
+    # 4. Shortage/Overage = actual fuel collected (cash + digital) + credit charges - expected revenue
+    actual_reported_fuel = req.fuel_cash_collected + req.fuel_digital_collected + credit_sales_total
+    shortage_overage = actual_reported_fuel - expected_revenue
+
+    # 5. Sum credit payments received today (grouped by payment method)
+    credit_payments_cash = db.query(func.sum(CreditTransaction.amount)).filter(
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.PAYMENT,
+        CreditTransaction.payment_method == PaymentMethodType.CASH
+    ).scalar() or Decimal("0.0")
+
+    credit_payments_digital = db.query(func.sum(CreditTransaction.amount)).filter(
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.PAYMENT,
+        CreditTransaction.payment_method == PaymentMethodType.ACCOUNT_TRANSFER
+    ).scalar() or Decimal("0.0")
+
+    # 6. Compute closing cash balance
+    # Closing Cash = Opening Cash + Fuel Cash + Credit Cash Payments + Misc Cash
+    closing_cash = session.opening_cash_balance + req.fuel_cash_collected + credit_payments_cash + session.misc_cash
+
+    # Update session summary values
+    session.status = DailyLogSessionStatus.CLOSED
+    session.closed_at = datetime.now(IST)
+    session.fuel_cash_collected = req.fuel_cash_collected
+    session.fuel_digital_collected = req.fuel_digital_collected
+    session.credit_sales_total = credit_sales_total
+    session.expected_revenue = expected_revenue
+    session.shortage_overage = shortage_overage
+    session.credit_payments_cash_total = credit_payments_cash
+    session.credit_payments_digital_total = credit_payments_digital
+    session.closing_cash_balance = closing_cash
+
+    # 7. Propagate tank updates to the Tank model itself (baseline dip & variance)
+    for tl in tank_logs:
+        tank = tl.tank
+        tank.actual_dip_volume = tl.actual_dip_volume
+        tank.variance = tl.calculated_variance
+
+    db.commit()
+    
+    return {
+        "status": "success",
+        "calculations": {
+            "expected_revenue": expected_revenue,
+            "credit_sales_total": credit_sales_total,
+            "shortage_overage": shortage_overage,
+            "opening_cash_balance": session.opening_cash_balance,
+            "closing_cash_balance": closing_cash
+        }
+    }
+
+@router.get("/log-status")
+def get_bulk_log_status(date_str: Optional[str] = None, db: Session = Depends(get_db)):
+    """Returns today's (or given date's) log status for all active pumps."""
+    if date_str:
+        try:
+            log_date = date.fromisoformat(date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+    else:
+        log_date = datetime.now(IST).date()
+
+    active_pumps = db.query(FuelPump).filter(FuelPump.is_active == True).all()
+    pumps_status = {}
+
+    for pump in active_pumps:
+        session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump.id,
+            DailyLogSession.log_date == log_date
+        ).first()
+        pumps_status[pump.id] = session.status if session else "NOT_LOGGED"
+
+    return pumps_status
+
+# --- Legacy Wrapper ---
+
+@router.post("/submit/{pump_id}", status_code=status.HTTP_201_CREATED)
+def submit_shift_log_legacy(pump_id: int, req: ShiftSubmitRequest, db: Session = Depends(get_db)):
+    """Legacy wrapper: wraps new daily log session API rules inside a single atomic submit."""
+    pump = db.query(FuelPump).filter(FuelPump.id == pump_id, FuelPump.is_active == True).first()
+    if not pump:
+        raise HTTPException(status_code=404, detail="Active fuel pump not found")
+
+    # Check if a session already exists for this date
+    existing_session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date == req.log_date
+    ).first()
+    if existing_session and existing_session.status == DailyLogSessionStatus.CLOSED:
+        raise HTTPException(status_code=400, detail=f"A closed shift log session already exists for {req.log_date}.")
+
+    # 1. Fetch or create log session
+    if not existing_session:
+        # Get opening cash balance
+        last_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.log_date < req.log_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+        opening_cash = last_session.closing_cash_balance if last_session and last_session.closing_cash_balance is not None else Decimal("0.0")
+        
+        session = DailyLogSession(
+            pump_id=pump_id,
+            log_date=req.log_date,
+            status=DailyLogSessionStatus.OPEN,
+            opened_at=req.log_timestamp,
+            opening_cash_balance=opening_cash,
+            misc_cash=Decimal("0.0"),
+            misc_digital=Decimal("0.0")
+        )
+        db.add(session)
+        db.flush()
+    else:
+        session = existing_session
+
+    session_id = session.id
+
+    # 2. Save nozzle logs
+    readings_save_payload = []
+    # Group by nozzle_id (in case of multiple entries in legacy request)
+    nozzle_payload_map = {}
+    for nl in req.nozzle_logs:
+        # Active price valid at log_timestamp
+        price, _ = get_historical_price_and_margin(db, db.query(Nozzle).filter(Nozzle.id == nl.nozzle_id).first().tank.product_id, req.log_timestamp)
+        entry = NozzleReadingEntry(
+            closing_reading=nl.closing_reading,
+            product_price=price,
+            is_reset=nl.is_reset
+        )
+        if nl.nozzle_id not in nozzle_payload_map:
+            nozzle_payload_map[nl.nozzle_id] = []
+        nozzle_payload_map[nl.nozzle_id].append(entry)
+
+    for nozzle_id, entries in nozzle_payload_map.items():
+        readings_save_payload.append(NozzleReadingsSave(nozzle_id=nozzle_id, entries=entries))
+
+    save_nozzle_readings(session_id, readings_save_payload, db)
+
+    # 3. Save tank logs
+    tank_save_payload = []
+    for tl in req.tank_logs:
+        tank_save_payload.append(TankReadingsSave(
+            tank_id=tl.tank_id,
+            testing_liters=tl.testing_liters,
+            fuel_received=tl.fuel_received,
+            actual_dip_volume=tl.actual_dip_volume
+        ))
+    save_tank_readings(session_id, tank_save_payload, db)
+
+    # 4. Save credit charges
+    # Clear existing credit charges linked to this session
+    db.query(CreditTransaction).filter(
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.CHARGE
+    ).delete()
+
+    for cs in req.credit_sales:
+        add_session_credit_charge(session_id, CreditChargeCreate(
+            account_id=cs.account_id,
+            amount=cs.amount,
+            notes=cs.notes or f"Legacy API submission credit sale"
+        ), db)
+
+    # 5. Close session
+    res = close_session(session_id, CloseSessionRequest(
+        fuel_cash_collected=req.cash_collected,
+        fuel_digital_collected=req.digital_collected
+    ), db)
 
     return {
         "status": "success",
         "message": "Shift logs submitted and validated successfully.",
-        "calculations": {
-            "expected_revenue": expected_revenue,
-            "total_reported": total_reported,
-            "shortage_overage": shortage_overage,
-            "opening_cash_balance": opening_cash_balance,
-            "closing_cash_balance": closing_cash_balance,
-        }
+        "calculations": res["calculations"]
     }

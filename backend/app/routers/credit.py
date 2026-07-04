@@ -129,7 +129,8 @@ def record_transaction(
         log_timestamp=tx.log_timestamp,
         type=tx.type,
         amount=tx.amount,
-        notes=tx.notes
+        notes=tx.notes,
+        payment_method=tx.payment_method
     )
     db.add(db_tx)
 

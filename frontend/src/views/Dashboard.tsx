@@ -570,7 +570,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
       {/* Main Navigation Bar - High Contrast Light Theme */}
-      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
+      <nav className="fixed top-0 left-0 right-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div
@@ -598,7 +598,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
           </div>
         </div>
       </nav>      {/* Main Content Area */}
-      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10 w-full">
+      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">
 
         {subView === 'home' && (
           <>
@@ -696,8 +696,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                     key={pump.id}
                     onClick={() => onSelectPump(pump.id)}
                     className={`group relative rounded-3xl bg-white border p-6 shadow-md hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col justify-between ${pump.is_active === false
-                        ? 'border-slate-200 opacity-60 bg-slate-50/50 hover:border-slate-300'
-                        : 'border-slate-200/80 hover:border-slate-300 hover:bg-slate-55'
+                      ? 'border-slate-200 opacity-60 bg-slate-50/50 hover:border-slate-300'
+                      : 'border-slate-200/80 hover:border-slate-300 hover:bg-slate-55'
                       }`}
                   >
                     {/* Visual accent glow */}
@@ -708,8 +708,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                     <div>
                       <div className="flex items-center justify-between gap-4">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[10px] font-bold ${pump.is_active === false
-                            ? 'bg-slate-250 text-slate-600 border border-slate-300'
-                            : 'bg-emerald-500/10 text-emerald-700 border border-emerald-500/20'
+                          ? 'bg-slate-250 text-slate-600 border border-slate-300'
+                          : 'bg-emerald-500/10 text-emerald-700 border border-emerald-500/20'
                           }`}>
                           Station #{index + 1}
                         </span>
@@ -719,7 +719,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             Inactive
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1 text-[10px] text-emerald-650 font-bold uppercase tracking-wider">
+                          <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold uppercase tracking-wider">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                             Active
                           </span>
@@ -727,8 +727,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                       </div>
 
                       <h3 className={`text-lg font-bold mt-4 font-display transition-colors ${pump.is_active === false
-                          ? 'text-slate-500 group-hover:text-slate-700'
-                          : 'text-slate-900 group-hover:text-emerald-600'
+                        ? 'text-slate-500 group-hover:text-slate-700'
+                        : 'text-slate-900 group-hover:text-emerald-600'
                         }`}>
                         {pump.name}
                       </h3>
@@ -791,17 +791,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                   className="group p-5 rounded-2xl bg-white border border-slate-200 hover:border-slate-350 hover:bg-slate-50/50 shadow-sm hover:shadow transition-all duration-300 cursor-pointer flex items-center justify-between"
                 >
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 group-hover:border-slate-300 flex items-center justify-center text-slate-500 group-hover:text-emerald-650 transition-all shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 group-hover:border-slate-300 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 transition-all shrink-0">
                       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.25}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M3 6a2 2 0 012-2h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm0 4h18m-14 5h3m4 0h4" />
                       </svg>
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-800 group-hover:text-emerald-655 transition-colors">Manage Credit Accounts</h4>
+                      <h4 className="text-sm font-bold text-slate-800 group-hover:text-emerald-600 transition-colors">Manage Credit Accounts</h4>
                       <p className="text-[10px] text-slate-500 mt-0.5">Track customer credit outstanding and logs</p>
                     </div>
                   </div>
-                  <div className="text-slate-400 group-hover:text-emerald-655 transition-colors">
+                  <div className="text-slate-400 group-hover:text-emerald-600 transition-colors">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                     </svg>

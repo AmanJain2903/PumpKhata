@@ -34,6 +34,8 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
   const [txType, setTxType] = useState<'CHARGE' | 'PAYMENT'>('CHARGE');
   const [txAmount, setTxAmount] = useState('');
   const [txNotes, setTxNotes] = useState('');
+  const [txPaymentMethod, setTxPaymentMethod] = useState<'CASH' | 'ACCOUNT_TRANSFER'>('CASH');
+
 
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -146,6 +148,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
     setTxType('CHARGE');
     setTxAmount('');
     setTxNotes('');
+    setTxPaymentMethod('CASH');
     setFormError('');
     setIsTxModalOpen(true);
   };
@@ -169,6 +172,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
         log_timestamp: localTimestamp,
         type: txType,
         amount,
+        payment_method: txType === 'PAYMENT' ? txPaymentMethod : undefined,
         notes: txNotes.trim() || undefined,
       });
       await fetchAccounts();
@@ -179,6 +183,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
       setIsSubmitting(false);
     }
   };
+
 
   // ========== View History ==========
   const handleOpenHistoryModal = async (acc: CreditAccount) => {
@@ -486,12 +491,34 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
                 <input type="number" step="0.01" placeholder="0.00" value={txAmount} onChange={(e) => setTxAmount(e.target.value)}
                   className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs font-bold" />
               </div>
+              {txType === 'PAYMENT' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider mb-2">Payment Method</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setTxPaymentMethod('CASH')}
+                      className={`flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition-all ${txPaymentMethod === 'CASH' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+                    >
+                      💵 Cash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTxPaymentMethod('ACCOUNT_TRANSFER')}
+                      className={`flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition-all ${txPaymentMethod === 'ACCOUNT_TRANSFER' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+                    >
+                      🏦 Bank Transfer
+                    </button>
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider">Notes / Memo <span className="text-slate-400 normal-case font-normal">(optional)</span></label>
                 <textarea placeholder="e.g. Fuel for Truck MH-12-3456, UPI ref 12345" value={txNotes} onChange={(e) => setTxNotes(e.target.value)} rows={3}
                   className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs resize-none" />
               </div>
               {formError && <p className="text-xs text-rose-600 font-semibold">{formError}</p>}
+
               <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
                 <button type="button" onClick={() => setIsTxModalOpen(false)} className="py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-500 hover:bg-slate-50 cursor-pointer">Cancel</button>
                 <button type="submit" disabled={isSubmitting} className={`py-2.5 px-4 rounded-xl text-white text-xs font-bold cursor-pointer ${txType === 'CHARGE' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
@@ -548,13 +575,22 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
                                 ₹{parseFloat(tx.amount as any).toFixed(2)}
                               </span>
                             </div>
+                            {!isCharge && tx.payment_method && (
+                              <div>
+                                <span className="text-[9px] text-slate-400 block font-bold uppercase">Method</span>
+                                <span className="text-[10px] font-bold text-slate-700">
+                                  {tx.payment_method === 'CASH' ? '💵 Cash' : '🏦 Bank Transfer'}
+                                </span>
+                              </div>
+                            )}
                             {tx.notes && (
-                              <div className="text-right flex-grow max-w-[70%]">
+                              <div className="text-right flex-grow max-w-[50%]">
                                 <span className="text-[9px] text-slate-400 block font-bold uppercase">Memo</span>
                                 <span className="text-[10px] font-medium text-slate-600 break-words">{tx.notes}</span>
                               </div>
                             )}
                           </div>
+
                         </div>
                       </div>
                     );
