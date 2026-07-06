@@ -123,10 +123,67 @@ def record_transaction(
     if tx.account_id != account_id:
         raise HTTPException(status_code=400, detail="Account ID mismatch in payload")
 
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from decimal import Decimal
+    from app.models.log import DailyLogSession, DailyLogSessionStatus, DailyFinancialLog
+    from app.models.fuel_pump import FuelPump
+
+    IST = ZoneInfo("Asia/Kolkata")
+    log_date = tx.log_date or datetime.now(IST).date()
+    log_timestamp = tx.log_timestamp or datetime.now(IST)
+
+    # 1. Fetch or create today's daily log session
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == account.pump_id,
+        DailyLogSession.log_date == log_date
+    ).first()
+
+    if session:
+        if session.status == DailyLogSessionStatus.CLOSED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot add transaction because the session for {log_date} is already closed. Please reopen it first."
+            )
+    else:
+        # Get opening cash balance from last created session
+        last_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == account.pump_id,
+            DailyLogSession.log_date < log_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
+        if last_session:
+            opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else Decimal("0.0")
+        else:
+            prev_fin_log = db.query(DailyFinancialLog).filter(
+                DailyFinancialLog.pump_id == account.pump_id,
+                DailyFinancialLog.log_date < log_date
+            ).order_by(DailyFinancialLog.log_date.desc()).first()
+            opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
+
+        # Get pump details
+        pump = db.query(FuelPump).filter(FuelPump.id == account.pump_id, FuelPump.is_active == True).first()
+        if not pump:
+            raise HTTPException(status_code=404, detail="Active fuel pump not found for this account")
+
+        # Create session
+        session = DailyLogSession(
+            pump_id=account.pump_id,
+            log_date=log_date,
+            status=DailyLogSessionStatus.OPEN,
+            opened_at=datetime.now(IST),
+            opening_cash_balance=opening_cash,
+            misc_cash=Decimal("0.0"),
+            misc_digital=Decimal("0.0")
+        )
+        db.add(session)
+        db.flush() # ensure session.id is populated
+
     db_tx = CreditTransaction(
         account_id=account_id,
-        log_date=tx.log_date,
-        log_timestamp=tx.log_timestamp,
+        session_id=session.id,
+        log_date=log_date,
+        log_timestamp=log_timestamp,
         type=tx.type,
         amount=tx.amount,
         notes=tx.notes,

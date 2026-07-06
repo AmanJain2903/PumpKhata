@@ -162,7 +162,12 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
     setIsSubmitting(true);
     try {
       const now = new Date();
-      const localDate = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+      const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const istTime = new Date(utcTime + (5.5 * 3600000));
+      const yyyy = istTime.getFullYear();
+      const mm = String(istTime.getMonth() + 1).padStart(2, '0');
+      const dd = String(istTime.getDate()).padStart(2, '0');
+      const localDate = `${yyyy}-${mm}-${dd}`;
       const localTimestamp = now.toISOString();
 
       await apiService.recordCreditTransaction(selectedAccount.id, {
