@@ -130,7 +130,7 @@ def record_transaction(
         type=tx.type,
         amount=tx.amount,
         notes=tx.notes,
-        payment_method=tx.payment_method
+        payment_method=tx.payment_method or ("CASH" if tx.type == CreditTransactionType.PAYMENT else None)
     )
     db.add(db_tx)
 

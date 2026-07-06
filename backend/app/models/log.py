@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, BigInteger, Numeric, Boolean, Date, DateTime, ForeignKey, UniqueConstraint, Enum as SQLEnum, Text
+from sqlalchemy import Column, Integer, BigInteger, Numeric, Boolean, Date, DateTime, ForeignKey, UniqueConstraint, Enum as SQLEnum, Text, String
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -41,6 +41,8 @@ class DailyLogSession(Base):
     nozzle_logs = relationship("DailyNozzleLog", back_populates="session", cascade="all, delete-orphan")
     tank_logs = relationship("DailyTankLog", back_populates="session", cascade="all, delete-orphan")
     credit_transactions = relationship("CreditTransaction", back_populates="session")
+    collections = relationship("DailyLogSessionPayment", back_populates="session", cascade="all, delete-orphan")
+    account_transactions = relationship("PumpAccountTransaction", back_populates="session", cascade="all, delete-orphan")
 
 
 class DailyNozzleLog(Base):
@@ -110,4 +112,21 @@ class DailyFinancialLog(Base):
 
     # Relationships
     pump = relationship("FuelPump", back_populates="daily_financial_logs")
+
+
+class DailyLogSessionPayment(Base):
+    __tablename__ = "daily_session_payments"
+
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(BigInteger, ForeignKey("daily_log_sessions.id"), nullable=False)
+    payment_method = Column(String(50), nullable=False)
+    amount = Column(Numeric(12, 2), default=0.0, nullable=False)
+    log_date = Column(Date, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "payment_method", name="uq_session_payment_method"),
+    )
+
+    # Relationships
+    session = relationship("DailyLogSession", back_populates="collections")
 

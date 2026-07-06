@@ -84,6 +84,34 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [pumpNameInput, setPumpNameInput] = useState('');
   const [isSavingPumpName, setIsSavingPumpName] = useState(false);
 
+  // Station Accounts states
+  const [pumpAccounts, setPumpAccounts] = useState<any[]>([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [newAccountName, setNewAccountName] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState<'TILL_DATE' | 'CURRENT_MONTH' | 'LAST_MONTH'>('TILL_DATE');
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [accountError, setAccountError] = useState('');
+  const [isPaytmLinked, setIsPaytmLinked] = useState(false);
+  const [showPaytmWarning, setShowPaytmWarning] = useState(false);
+  const [existingPaytmAccountName, setExistingPaytmAccountName] = useState('');
+
+  const handlePaytmCheckboxChange = (checked: boolean) => {
+    if (checked) {
+      const existingLinked = pumpAccounts.find((a: any) => a.is_paytm_linked);
+      if (existingLinked) {
+        setExistingPaytmAccountName(existingLinked.name);
+        setShowPaytmWarning(true);
+        return;
+      }
+    }
+    setIsPaytmLinked(checked);
+  };
+
+  const [deletingAccount, setDeletingAccount] = useState<any | null>(null);
+  const [isDeleteAccountOpen, setIsDeleteAccountOpen] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState('');
+
   // Scroll to top on component mount or pumpId change
   useEffect(() => {
     const forceScrollToTop = () => {
@@ -213,6 +241,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     try {
       const config = await apiService.getPumpConfig(pumpId);
       setPump(config.pump);
+      setPumpAccounts(config.pump_accounts || []);
 
       // Sort tanks alphabetically
       const sortedTanks = [...config.tanks].sort((a, b) => a.name.localeCompare(b.name));
@@ -441,6 +470,52 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const handleCancelEdit = () => {
     setIsEditing(false);
     setValidationErrors([]);
+  };
+
+  // --- Station Accounts CRUD Actions ---
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError('');
+    if (!newAccountName.trim()) {
+      setAccountError('Account name cannot be empty.');
+      return;
+    }
+
+    setIsCreatingAccount(true);
+    try {
+      await apiService.createPumpAccount(pumpId, newAccountName.trim(), isPaytmLinked);
+      setNewAccountName('');
+      setIsPaytmLinked(false);
+      setIsAccountModalOpen(false);
+      await fetchStationConfig();
+    } catch (err: any) {
+      setAccountError(err.message || 'Failed to create station account.');
+    } finally {
+      setIsCreatingAccount(false);
+    }
+  };
+
+  const handleInitiateDeleteAccount = (account: any) => {
+    setDeletingAccount(account);
+    setDeleteAccountError('');
+    setIsDeletingAccount(false);
+    setIsDeleteAccountOpen(true);
+  };
+
+  const handleConfirmDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    setIsDeletingAccount(true);
+    setDeleteAccountError('');
+    try {
+      await apiService.deletePumpAccount(pumpId, deletingAccount.id);
+      setIsDeleteAccountOpen(false);
+      setDeletingAccount(null);
+      await fetchStationConfig();
+    } catch (err: any) {
+      setDeleteAccountError(err.message || 'Failed to delete station account.');
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   // --- Tank Editing Operations ---
@@ -1010,13 +1085,12 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                       <span className="font-extrabold text-slate-700">{getISTDateString()}</span>
                       <span className="text-slate-300">•</span>
                       <span>Status:</span>
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
-                        todayLogStatus === 'CLOSED'
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${todayLogStatus === 'CLOSED'
                           ? 'bg-rose-50 text-rose-700 border border-rose-250'
                           : todayLogStatus === 'OPEN'
                             ? 'bg-amber-50 text-amber-700 border border-amber-250'
                             : 'bg-slate-100 text-slate-600 border border-slate-200'
-                      }`}>
+                        }`}>
                         {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : todayLogStatus === 'OPEN' ? 'In Progress ⚡' : 'Not Started 📝'}
                       </span>
                     </p>
@@ -1566,6 +1640,104 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 </div>
               </div>
             )}
+
+            {/* Station Accounts Management Card */}
+            {pump && !isEditing && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm mt-8 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 font-display">Station Accounts</h3>
+                    <p className="text-xs text-slate-450 mt-0.5">
+                      Manage bank, cash, and wallet accounts for this station.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 self-end sm:self-auto">
+                    <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('TILL_DATE')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'TILL_DATE' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Till Date
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('CURRENT_MONTH')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'CURRENT_MONTH' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Current Month
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('LAST_MONTH')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'LAST_MONTH' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Last Month
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setIsPaytmLinked(false);
+                        setIsAccountModalOpen(true);
+                      }}
+                      className="py-2.5 px-4 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>+ Add Account</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {pumpAccounts.map((acc: any) => (
+                    <div
+                      key={acc.id}
+                      className="p-5 rounded-2xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between gap-4 animate-scaleIn"
+                    >
+                      <div>
+                        <div className="flex justify-between items-start">
+                          <h4 className="text-sm font-extrabold text-slate-800 font-display">{acc.name}</h4>
+                          <div className="flex gap-1.5 items-center">
+                            {acc.is_paytm_linked && (
+                              <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 uppercase tracking-wider animate-fadeIn">
+                                Paytm Linked
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {balanceFilter === 'TILL_DATE'
+                            ? 'Current running balance'
+                            : balanceFilter === 'CURRENT_MONTH'
+                              ? 'Earned this month (1st - today)'
+                              : 'Earned last month (full month)'}
+                        </p>
+                      </div>
+
+                      <div className="flex justify-between items-end">
+                        <span className="text-lg font-black text-slate-900 font-display">
+                          ₹{parseFloat(
+                            (balanceFilter === 'TILL_DATE'
+                              ? acc.balance
+                              : balanceFilter === 'CURRENT_MONTH'
+                                ? acc.current_month_balance
+                                : acc.last_month_balance) || '0'
+                          ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                        {!acc.is_constant && (
+                          <button
+                            onClick={() => handleInitiateDeleteAccount(acc)}
+                            className="text-rose-600 hover:text-rose-700 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -1790,6 +1962,168 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                   {unclearedAccounts.length > 0 ? 'Cannot Delete' : deletePumpStep === 1 ? 'Proceed' : 'Delete Station Permanently'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Station Account Modal */}
+      {isAccountModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display">Add Station Account</h3>
+              <p className="text-xs text-slate-500 mt-1">Configure cash/bank details for station collections</p>
+            </div>
+
+            <form onSubmit={handleCreateAccount} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider">Account Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. HDFC Bank, SBI Account, Cash Chest"
+                  value={newAccountName}
+                  onChange={(e) => setNewAccountName(e.target.value)}
+                  className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  id="linkPaytmCheckbox"
+                  type="checkbox"
+                  checked={isPaytmLinked}
+                  onChange={(e) => handlePaytmCheckboxChange(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <label htmlFor="linkPaytmCheckbox" className="text-xs font-bold text-slate-700 cursor-pointer select-none">
+                  Link Paytm Collections (Paytm 1, 2, 3)
+                </label>
+              </div>
+
+              {accountError && <p className="text-xs text-rose-600 font-semibold">{accountError}</p>}
+
+              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAccountModalOpen(false)}
+                  className="py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-550 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingAccount}
+                  className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-150 disabled:text-slate-400 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  {isCreatingAccount && (
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  )}
+                  <span>Create Account</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Paytm Override Warning Modal */}
+      {showPaytmWarning && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2 text-amber-600">
+                <span>⚠️ Override Paytm Link</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-2">
+                Paytm collections are already linked to the account <strong className="text-slate-800">"{existingPaytmAccountName}"</strong>.
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Toggling this on will redirect all future Paytm collections to this new account and unlink <strong className="text-slate-800">"{existingPaytmAccountName}"</strong>.
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaytmLinked(false);
+                  setShowPaytmWarning(false);
+                }}
+                className="py-2 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-550 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaytmLinked(true);
+                  setShowPaytmWarning(false);
+                }}
+                className="py-2 px-3.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+              >
+                Proceed & Override
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Warning Modal */}
+      {isDeleteAccountOpen && deletingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2 text-rose-600">
+                <span>⚠️ Warning: Delete Account</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">This action cannot be undone</p>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to delete the account <strong className="text-slate-800 font-bold">"{deletingAccount.name}"</strong>?
+              </p>
+
+              <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-3">
+                <p className="text-xs text-rose-750 font-bold">
+                  ⚠️ Deletion Warning
+                </p>
+                <p className="text-xs text-rose-650 leading-normal">
+                  Any remaining balance of <strong className="font-extrabold text-rose-700">₹{parseFloat(deletingAccount.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> will be permanently removed from this station.
+                </p>
+              </div>
+            </div>
+
+            {deleteAccountError && <p className="text-xs text-rose-600 font-semibold">{deleteAccountError}</p>}
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDeleteAccountOpen(false)}
+                disabled={isDeletingAccount}
+                className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteAccount}
+                disabled={isDeletingAccount}
+                className="py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                {isDeletingAccount && (
+                  <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                )}
+                <span>Delete Account</span>
+              </button>
             </div>
           </div>
         </div>

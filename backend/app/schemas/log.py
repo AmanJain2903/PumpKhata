@@ -3,7 +3,7 @@ from typing import Optional, List
 from decimal import Decimal
 from datetime import date, datetime
 from app.schemas.timezone_helper import localize_datetime
-from app.schemas.credit import CreditTransactionResponse
+from app.schemas.credit import CreditTransactionResponse, PumpAccountTransactionResponse
 
 # --- Daily Nozzle Log Schemas ---
 class DailyNozzleLogBase(BaseModel):
@@ -212,8 +212,22 @@ class DailyLogSessionResponse(DailyLogSessionBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+# --- Daily Log Session Payment Schemas ---
+class DailyLogSessionPaymentBase(BaseModel):
+    session_id: int
+    payment_method: str
+    amount: Decimal
+
+class DailyLogSessionPaymentResponse(DailyLogSessionPaymentBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
 class DailyLogSessionDetailResponse(DailyLogSessionResponse):
     nozzle_logs: List[DailyNozzleLogResponse] = []
     tank_logs: List[DailyTankLogResponse] = []
     credit_transactions: List[CreditTransactionResponse] = []
+    collections: List[DailyLogSessionPaymentResponse] = []
+    account_transactions: List[PumpAccountTransactionResponse] = []
+
 

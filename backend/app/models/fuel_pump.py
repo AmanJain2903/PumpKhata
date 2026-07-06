@@ -17,4 +17,5 @@ class FuelPump(Base):
     credit_accounts = relationship("CreditAccount", back_populates="pump")
     daily_financial_logs = relationship("DailyFinancialLog", back_populates="pump")
     daily_log_sessions = relationship("DailyLogSession", back_populates="pump", cascade="all, delete-orphan")
+    pump_accounts = relationship("PumpAccount", back_populates="pump", cascade="all, delete-orphan")
 

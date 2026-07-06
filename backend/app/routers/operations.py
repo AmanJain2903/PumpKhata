@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel
@@ -52,18 +52,25 @@ class CreditChargeCreate(BaseModel):
 class CreditPaymentCreate(BaseModel):
     account_id: int
     amount: Decimal
-    payment_method: str  # "CASH" or "ACCOUNT_TRANSFER"
+    payment_method: Optional[str] = "CASH"
     notes: Optional[str] = None
 
 class MiscSave(BaseModel):
     misc_cash: Decimal = Decimal("0.0")
-    misc_digital: Decimal = Decimal("0.0")
     misc_notes: Optional[str] = None
 
 
+class SessionCollectionInput(BaseModel):
+    payment_method: str
+    amount: Decimal
+
+class CashDepositInput(BaseModel):
+    account_id: int
+    amount: Decimal
+
 class CloseSessionRequest(BaseModel):
-    fuel_cash_collected: Decimal
-    fuel_digital_collected: Decimal
+    fuel_collections: List[SessionCollectionInput]
+    cash_deposits: Optional[List[CashDepositInput]] = None
 
 # Legacy Request Schemas
 class NozzleLogEntry(BaseModel):
@@ -329,6 +336,22 @@ def reopen_session(session_id: int, db: Session = Depends(get_db)):
     if session.log_date != today:
         raise HTTPException(status_code=400, detail="Only today's logging session can be re-opened.")
 
+    # Reverse ALL account ledger entries for this session (IOCL, Paytm, etc.)
+    from app.models.credit import PumpAccount, PumpAccountTransaction
+    from sqlalchemy import func
+    from decimal import Decimal
+
+    # Get all ledger entries grouped by account for this session
+    ledger_entries = db.query(PumpAccountTransaction).filter(
+        PumpAccountTransaction.session_id == session_id
+    ).all()
+
+    for entry in ledger_entries:
+        # Reverse the balance
+        account = db.query(PumpAccount).filter(PumpAccount.id == entry.account_id).first()
+        if account:
+            account.balance -= entry.amount
+
     session.status = DailyLogSessionStatus.OPEN
     session.closed_at = None
     db.commit()
@@ -361,6 +384,11 @@ def save_nozzle_readings(session_id: int, readings: List[NozzleReadingsSave], db
         opening_reading = prev_log.closing_reading if prev_log else Decimal("0.0")
 
         for idx, entry in enumerate(r.entries):
+            if entry.closing_reading < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Closing reading cannot be negative on Nozzle {nozzle.name}."
+                )
             # Check rollover logic
             if entry.closing_reading < opening_reading:
                 if not entry.is_reset:
@@ -411,6 +439,11 @@ def save_tank_readings(session_id: int, readings: List[TankReadingsSave], db: Se
         nozzle_dispensed[nl.nozzle_id] = nozzle_dispensed.get(nl.nozzle_id, Decimal("0.0")) + nl.gross_liters_sold
 
     for r in readings:
+        if r.testing_liters < 0 or r.fuel_received < 0 or r.actual_dip_volume < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Testing liters, fuel received, and actual dip volume cannot be negative."
+            )
         tank = db.query(Tank).filter(Tank.id == r.tank_id).first()
         if not tank:
             raise HTTPException(status_code=404, detail=f"Tank {r.tank_id} not found")
@@ -455,6 +488,9 @@ def add_session_credit_charge(session_id: int, req: CreditChargeCreate, db: Sess
 
     if session.status == DailyLogSessionStatus.CLOSED:
         raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Credit sale amount must be positive.")
 
     account = db.query(CreditAccount).filter(CreditAccount.id == req.account_id, CreditAccount.pump_id == session.pump_id).first()
     if not account:
@@ -510,12 +546,14 @@ def add_session_credit_payment(session_id: int, req: CreditPaymentCreate, db: Se
     if session.status == DailyLogSessionStatus.CLOSED:
         raise HTTPException(status_code=400, detail="Cannot edit a closed session")
 
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be positive.")
+
     account = db.query(CreditAccount).filter(CreditAccount.id == req.account_id, CreditAccount.pump_id == session.pump_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Credit account not found or mismatch")
 
-    if req.payment_method not in ["CASH", "ACCOUNT_TRANSFER"]:
-        raise HTTPException(status_code=400, detail="Invalid payment method. Use CASH or ACCOUNT_TRANSFER.")
+    pay_method = req.payment_method or "CASH"
 
     tx = CreditTransaction(
         account_id=req.account_id,
@@ -524,7 +562,7 @@ def add_session_credit_payment(session_id: int, req: CreditPaymentCreate, db: Se
         log_timestamp=datetime.now(IST),
         type=CreditTransactionType.PAYMENT,
         amount=req.amount,
-        payment_method=PaymentMethodType(req.payment_method),
+        payment_method=pay_method,
         notes=req.notes
     )
     db.add(tx)
@@ -568,8 +606,11 @@ def save_session_misc(session_id: int, req: MiscSave, db: Session = Depends(get_
     if session.status == DailyLogSessionStatus.CLOSED:
         raise HTTPException(status_code=400, detail="Cannot edit a closed session")
 
+    if req.misc_cash < 0:
+        raise HTTPException(status_code=400, detail="Miscellaneous cash income cannot be negative.")
+
     session.misc_cash = req.misc_cash
-    session.misc_digital = req.misc_digital
+    session.misc_digital = Decimal("0.0")
     session.misc_notes = req.misc_notes
     db.commit()
     return {"status": "success", "message": "Miscellaneous income totals saved"}
@@ -614,32 +655,66 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
         CreditTransaction.type == CreditTransactionType.CHARGE
     ).scalar() or Decimal("0.0")
 
-    # 4. Shortage/Overage = actual fuel collected (cash + digital) + credit charges - expected revenue
-    actual_reported_fuel = req.fuel_cash_collected + req.fuel_digital_collected + credit_sales_total
+    # 4. Save and calculate payment method collections breakdown
+    from app.models.log import DailyLogSessionPayment
+    db.query(DailyLogSessionPayment).filter(DailyLogSessionPayment.session_id == session_id).delete()
+    
+    fuel_cash_collected = Decimal("0.0")
+    fuel_digital_collected = Decimal("0.0")
+    
+    for col in req.fuel_collections:
+        if col.amount < 0:
+            raise HTTPException(status_code=400, detail=f"Collection amount for {col.payment_method} cannot be negative.")
+        col_db = DailyLogSessionPayment(
+            session_id=session_id,
+            payment_method=col.payment_method,
+            amount=col.amount,
+            log_date=session.log_date
+        )
+        db.add(col_db)
+        if col.payment_method == "Cash":
+            fuel_cash_collected += col.amount
+        else:
+            fuel_digital_collected += col.amount
+
+    # 5. Shortage/Overage = actual fuel collected (cash + digital) + credit charges - expected revenue
+    actual_reported_fuel = fuel_cash_collected + fuel_digital_collected + credit_sales_total
     shortage_overage = actual_reported_fuel - expected_revenue
 
-    # 5. Sum credit payments received today (grouped by payment method)
+    # 6. Sum credit payments received today (grouped by payment method, all Cash now)
     credit_payments_cash = db.query(func.sum(CreditTransaction.amount)).filter(
         CreditTransaction.session_id == session_id,
-        CreditTransaction.type == CreditTransactionType.PAYMENT,
-        CreditTransaction.payment_method == PaymentMethodType.CASH
+        CreditTransaction.type == CreditTransactionType.PAYMENT
     ).scalar() or Decimal("0.0")
 
-    credit_payments_digital = db.query(func.sum(CreditTransaction.amount)).filter(
-        CreditTransaction.session_id == session_id,
-        CreditTransaction.type == CreditTransactionType.PAYMENT,
-        CreditTransaction.payment_method == PaymentMethodType.ACCOUNT_TRANSFER
-    ).scalar() or Decimal("0.0")
+    credit_payments_digital = Decimal("0.0")
 
-    # 6. Compute closing cash balance
-    # Closing Cash = Opening Cash + Fuel Cash + Credit Cash Payments + Misc Cash
-    closing_cash = session.opening_cash_balance + req.fuel_cash_collected + credit_payments_cash + session.misc_cash
+    # 7. Compute closing cash balance
+    # Closing Cash = Opening Cash + Fuel Cash + Credit Cash Payments + Misc Cash - Total Cash Deposits
+    cash_balance_before = session.opening_cash_balance + fuel_cash_collected + credit_payments_cash + session.misc_cash
+    
+    total_deposited = Decimal("0.0")
+    if req.cash_deposits:
+        for deposit in req.cash_deposits:
+            if deposit.amount < 0:
+                raise HTTPException(status_code=400, detail="Cash deposit amounts cannot be negative.")
+            if deposit.amount > 0:
+                total_deposited += deposit.amount
+                
+    if total_deposited > cash_balance_before:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total cash deposited (₹{total_deposited}) cannot exceed the total cash balance available before deposits (₹{cash_balance_before})."
+        )
+        
+    closing_cash = cash_balance_before - total_deposited
+
 
     # Update session summary values
     session.status = DailyLogSessionStatus.CLOSED
     session.closed_at = datetime.now(IST)
-    session.fuel_cash_collected = req.fuel_cash_collected
-    session.fuel_digital_collected = req.fuel_digital_collected
+    session.fuel_cash_collected = fuel_cash_collected
+    session.fuel_digital_collected = fuel_digital_collected
     session.credit_sales_total = credit_sales_total
     session.expected_revenue = expected_revenue
     session.shortage_overage = shortage_overage
@@ -647,11 +722,107 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
     session.credit_payments_digital_total = credit_payments_digital
     session.closing_cash_balance = closing_cash
 
-    # 7. Propagate tank updates to the Tank model itself (baseline dip & variance)
+    # Propagate tank updates to the Tank model itself (baseline dip & variance)
     for tl in tank_logs:
         tank = tl.tank
         tank.actual_dip_volume = tl.actual_dip_volume
         tank.variance = tl.calculated_variance
+
+    # Update Station IOCL Account balance with XTRA Power and XTRA Reward collections
+    from app.models.credit import PumpAccount, PumpAccountTransaction
+    
+    # Clear existing ledger transactions of this session before recreating them
+    db.query(PumpAccountTransaction).filter(
+        PumpAccountTransaction.session_id == session_id
+    ).delete()
+    
+    iocl_inflow = sum(col.amount for col in req.fuel_collections if col.payment_method in ["XTRA Power", "XTRA Reward"])
+    if iocl_inflow > 0:
+        iocl_account = db.query(PumpAccount).filter(PumpAccount.pump_id == session.pump_id, PumpAccount.name == "IOCL Account").first()
+        if not iocl_account:
+            iocl_account = PumpAccount(
+                pump_id=session.pump_id,
+                name="IOCL Account",
+                balance=Decimal("0.0"),
+                is_constant=True
+            )
+            db.add(iocl_account)
+            db.flush()  # ensure iocl_account.id is available
+        iocl_account.balance += iocl_inflow
+
+        # Insert ledger entry
+        ledger_entry = PumpAccountTransaction(
+            account_id=iocl_account.id,
+            session_id=session.id,
+            amount=iocl_inflow,
+            log_date=session.log_date,
+            description="XTRA Power + XTRA Reward collections"
+        )
+        db.add(ledger_entry)
+
+    # Update Paytm-linked account: today's Paytm 3 + yesterday's Paytm 1 & Paytm 2
+    paytm_credited_today = Decimal("0.0")
+
+    paytm_account = db.query(PumpAccount).filter(
+        PumpAccount.pump_id == session.pump_id,
+        PumpAccount.is_paytm_linked == True
+    ).first()
+
+    if paytm_account:
+        # Today's Paytm 3
+        today_paytm3 = sum(col.amount for col in req.fuel_collections if col.payment_method == "Paytm 3")
+
+        # Yesterday's Paytm 1 & Paytm 2 from closed session
+        yesterday = session.log_date - timedelta(days=1)
+        yesterday_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == session.pump_id,
+            DailyLogSession.log_date == yesterday,
+            DailyLogSession.status == DailyLogSessionStatus.CLOSED
+        ).first()
+
+        yesterday_paytm1 = Decimal("0.0")
+        yesterday_paytm2 = Decimal("0.0")
+        if yesterday_session:
+            yesterday_paytm1 = db.query(func.sum(DailyLogSessionPayment.amount)).filter(
+                DailyLogSessionPayment.session_id == yesterday_session.id,
+                DailyLogSessionPayment.payment_method == "Paytm 1"
+            ).scalar() or Decimal("0.0")
+            yesterday_paytm2 = db.query(func.sum(DailyLogSessionPayment.amount)).filter(
+                DailyLogSessionPayment.session_id == yesterday_session.id,
+                DailyLogSessionPayment.payment_method == "Paytm 2"
+            ).scalar() or Decimal("0.0")
+
+        paytm_inflow = today_paytm3 + yesterday_paytm1 + yesterday_paytm2
+        if paytm_inflow > 0:
+            paytm_account.balance += paytm_inflow
+            paytm_ledger = PumpAccountTransaction(
+                account_id=paytm_account.id,
+                session_id=session.id,
+                amount=paytm_inflow,
+                log_date=session.log_date,
+                description="Paytm collections (Paytm 3 today + Paytm 1 & 2 yesterday)"
+            )
+            db.add(paytm_ledger)
+            paytm_credited_today = paytm_inflow
+    # Process cash deposits if any
+    if req.cash_deposits:
+        for deposit in req.cash_deposits:
+            if deposit.amount > 0:
+                custom_acc = db.query(PumpAccount).filter(
+                    PumpAccount.id == deposit.account_id,
+                    PumpAccount.pump_id == session.pump_id,
+                    PumpAccount.name != "IOCL Account"
+                ).first()
+                if custom_acc:
+                    custom_acc.balance += deposit.amount
+                    deposit_ledger = PumpAccountTransaction(
+                        account_id=custom_acc.id,
+                        session_id=session.id,
+                        amount=deposit.amount,
+                        log_date=session.log_date,
+                        description="Cash deposited from station cash balance"
+                    )
+                    db.add(deposit_ledger)
 
     db.commit()
     
@@ -662,7 +833,8 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
             "credit_sales_total": credit_sales_total,
             "shortage_overage": shortage_overage,
             "opening_cash_balance": session.opening_cash_balance,
-            "closing_cash_balance": closing_cash
+            "closing_cash_balance": closing_cash,
+            "paytm_credited_today": paytm_credited_today
         }
     }
 
@@ -778,9 +950,12 @@ def submit_shift_log_legacy(pump_id: int, req: ShiftSubmitRequest, db: Session =
         ), db)
 
     # 5. Close session
+    legacy_collections = [
+        SessionCollectionInput(payment_method="Cash", amount=req.cash_collected),
+        SessionCollectionInput(payment_method="Miscellaneous", amount=req.digital_collected)
+    ]
     res = close_session(session_id, CloseSessionRequest(
-        fuel_cash_collected=req.cash_collected,
-        fuel_digital_collected=req.digital_collected
+        fuel_collections=legacy_collections
     ), db)
 
     return {

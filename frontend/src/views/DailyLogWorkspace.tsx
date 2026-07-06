@@ -30,6 +30,17 @@ interface LocalTankLog {
   calculated_variance: number;
 }
 
+const PAYMENT_METHODS = [
+  'Paytm 1',
+  'Paytm 2',
+  'Paytm 3',
+  'ICICI',
+  'XTRA Power',
+  'XTRA Reward',
+  'Cash',
+  'Miscellaneous'
+];
+
 export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, onBack }) => {
   // Session & Config state
   const [session, setSession] = useState<any>(null);
@@ -37,6 +48,10 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const [creditAccounts, setCreditAccounts] = useState<CreditAccount[]>([]);
   const [creditCharges, setCreditCharges] = useState<CreditTransaction[]>([]);
   const [creditPayments, setCreditPayments] = useState<CreditTransaction[]>([]);
+  const [yesterdayPaytm1, setYesterdayPaytm1] = useState(0);
+  const [yesterdayPaytm2, setYesterdayPaytm2] = useState(0);
+  const [pumpAccounts, setPumpAccounts] = useState<any[]>([]);
+  const [cashDeposits, setCashDeposits] = useState<{ [accountId: number]: string }>({});
 
   // Loading / Error states
   const [isLoading, setIsLoading] = useState(true);
@@ -90,22 +105,21 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   // 4. Credit payments
   const [paymentAccountId, setPaymentAccountId] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'ACCOUNT_TRANSFER'>('CASH');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
-  // 5. Misc income
+  // 5. Other Items income (renamed from Misc)
   const [miscCash, setMiscCash] = useState('0');
-  const [miscDigital, setMiscDigital] = useState('0');
   const [miscNotes, setMiscNotes] = useState('');
   const [miscSaving, setMiscSaving] = useState(false);
   const [miscError, setMiscError] = useState('');
   const [miscSuccess, setMiscSuccess] = useState('');
 
-  // 6. Close session
-  const [fuelCash, setFuelCash] = useState('');
-  const [fuelDigital, setFuelDigital] = useState('');
+  // 6. Close session collections
+  const [fuelCollections, setFuelCollections] = useState<{ payment_method: string; amount: string }[]>(
+    PAYMENT_METHODS.map(m => ({ payment_method: m, amount: '' }))
+  );
   const [closeSaving, setCloseSaving] = useState(false);
   const [closeError, setCloseError] = useState('');
 
@@ -138,10 +152,25 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       const activeNozzles = config.nozzles.filter((nz: Nozzle) => nz.is_active !== false);
       setNozzlesList(activeNozzles);
       setCreditAccounts(config.credit_accounts);
+      setPumpAccounts(config.pump_accounts || []);
+      setYesterdayPaytm1(config.yesterday_paytm1 || 0);
+      setYesterdayPaytm2(config.yesterday_paytm2 || 0);
 
       // 2. Fetch or create today's session in IST date
       const activeSession = await apiService.getOrCreateSession(pumpId, dateStr);
       setSession(activeSession);
+
+      if (activeSession.account_transactions) {
+        const depositsMap: { [accountId: number]: string } = {};
+        activeSession.account_transactions.forEach((tx: any) => {
+          if (tx.description === "Cash deposited from station cash balance") {
+            depositsMap[tx.account_id] = String(tx.amount);
+          }
+        });
+        setCashDeposits(depositsMap);
+      } else {
+        setCashDeposits({});
+      }
 
       // 3. Fetch prefill readings to get correct opening bounds
       const prefill = await apiService.prefillShiftLog(pumpId);
@@ -195,14 +224,20 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       setCreditCharges(txns.filter((t: any) => t.type === 'CHARGE'));
       setCreditPayments(txns.filter((t: any) => t.type === 'PAYMENT'));
 
-      // Prefill Section 5: Misc
+      // Prefill Section 5: Other Items
       setMiscCash(String(activeSession.misc_cash || '0'));
-      setMiscDigital(String(activeSession.misc_digital || '0'));
       setMiscNotes(activeSession.misc_notes || '');
 
-      // Prefill Section 6: Fuel Close
-      setFuelCash(activeSession.fuel_cash_collected !== null ? String(activeSession.fuel_cash_collected) : '');
-      setFuelDigital(activeSession.fuel_digital_collected !== null ? String(activeSession.fuel_digital_collected) : '');
+      // Prefill Section 6: Fuel Close collections
+      const sessionPayments = activeSession.collections || [];
+      const initCollections = PAYMENT_METHODS.map(method => {
+        const matchingPay = sessionPayments.find((p: any) => p.payment_method === method);
+        return {
+          payment_method: method,
+          amount: matchingPay ? String(matchingPay.amount) : ''
+        };
+      });
+      setFuelCollections(initCollections);
 
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to initialize daily operation workspace.');
@@ -343,10 +378,18 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         if (isNaN(actual) || actual < 0) {
           throw new Error(`Invalid actual dip volume for Tank: ${log.tank_name}`);
         }
+        const testing = parseFloat(log.testing_liters) || 0;
+        if (testing < 0) {
+          throw new Error(`Testing liters cannot be negative for Tank: ${log.tank_name}`);
+        }
+        const received = parseFloat(log.fuel_received) || 0;
+        if (received < 0) {
+          throw new Error(`Fuel received cannot be negative for Tank: ${log.tank_name}`);
+        }
         return {
           tank_id: log.tank_id,
-          testing_liters: parseFloat(log.testing_liters) || 0,
-          fuel_received: parseFloat(log.fuel_received) || 0,
+          testing_liters: testing,
+          fuel_received: received,
           actual_dip_volume: actual
         };
       });
@@ -435,7 +478,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
     setPaymentSaving(true);
     try {
-      const newTx = await apiService.addCreditPayment(session.id, parseInt(paymentAccountId), amt, paymentMethod, paymentNotes.trim() || undefined);
+      const newTx = await apiService.addCreditPayment(session.id, parseInt(paymentAccountId), amt, 'CASH', paymentNotes.trim() || undefined);
       setCreditPayments(prev => [newTx, ...prev]);
 
       setPaymentAmount('');
@@ -464,24 +507,27 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
     }
   };
 
-  // Handlers for Section 5: Misc Income
+  // Handlers for Section 5: Other Items Income
   const handleSaveMiscIncome = async () => {
     setMiscError('');
     setMiscSuccess('');
     const cash = parseFloat(miscCash) || 0;
-    const digital = parseFloat(miscDigital) || 0;
+    if (cash < 0) {
+      setMiscError('Other items income cash cannot be negative.');
+      return;
+    }
 
     setMiscSaving(true);
     try {
-      await apiService.saveMiscIncome(session.id, cash, digital, miscNotes.trim() || undefined);
-      setMiscSuccess('Miscellaneous income saved successfully!');
+      await apiService.saveMiscIncome(session.id, cash, miscNotes.trim() || undefined);
+      setMiscSuccess('Other items income saved successfully!');
 
       const updatedSession = await apiService.getOrCreateSession(pumpId);
       setSession(updatedSession);
 
       setTimeout(() => setOpenSection(6), 600);
     } catch (err: any) {
-      setMiscError(err.message || 'Failed to save misc income.');
+      setMiscError(err.message || 'Failed to save other items income.');
     } finally {
       setMiscSaving(false);
     }
@@ -491,15 +537,53 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const handleCloseSession = async (e: React.FormEvent) => {
     e.preventDefault();
     setCloseError('');
-    const cash = parseFloat(fuelCash);
-    const digital = parseFloat(fuelDigital);
 
-    if (isNaN(cash) || cash < 0) { setCloseError('Please enter a valid cash collected amount.'); return; }
-    if (isNaN(digital) || digital < 0) { setCloseError('Please enter a valid digital collected amount.'); return; }
+    // Prepare collections payload
+    const collectionsPayload = [];
+    for (const col of fuelCollections) {
+      const trimmed = (col.amount || '').trim();
+      const amt = trimmed === '' ? 0 : parseFloat(trimmed);
+      if (isNaN(amt) || amt < 0) {
+        setCloseError(`Please enter a valid non-negative amount for ${col.payment_method}.`);
+        return;
+      }
+      collectionsPayload.push({
+        payment_method: col.payment_method,
+        amount: amt
+      });
+    }
+
+    // Calculate cash available before deposits
+    const fuelCashVal = collectionsPayload.find(c => c.payment_method === 'Cash')?.amount || 0;
+    const maxCashAvailable = parseFloat(session?.opening_cash_balance as any || 0) + fuelCashVal + creditPaymentsCashSum + (parseFloat(miscCash) || 0);
+
+    // Prepare cash deposits payload
+    const depositsPayload = [];
+    let totalDeposited = 0;
+    for (const [accountId, val] of Object.entries(cashDeposits)) {
+      const trimmed = (val || '').trim();
+      const amt = trimmed === '' ? 0 : parseFloat(trimmed);
+      if (isNaN(amt) || amt < 0) {
+        setCloseError(`Cash deposit amount cannot be negative.`);
+        return;
+      }
+      if (amt > 0) {
+        totalDeposited += amt;
+        depositsPayload.push({
+          account_id: parseInt(accountId),
+          amount: amt
+        });
+      }
+    }
+
+    if (totalDeposited > maxCashAvailable) {
+      setCloseError(`Total cash deposited (₹${totalDeposited.toLocaleString('en-IN')}) cannot exceed the total cash balance available before deposits (₹${maxCashAvailable.toLocaleString('en-IN')}).`);
+      return;
+    }
 
     setCloseSaving(true);
     try {
-      await apiService.closeSession(session.id, cash, digital);
+      await apiService.closeSession(session.id, collectionsPayload, depositsPayload);
       setSuccessMsg('Day logged and locked successfully! Redirecting...');
 
       setTimeout(() => {
@@ -528,15 +612,27 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
   const isClosed = session?.status === 'CLOSED';
 
+  // Derived fuel cash and digital from dynamic collections state
+  const fuelCash = fuelCollections.find(c => c.payment_method === 'Cash')?.amount || '';
+  const fuelDigital = String(
+    fuelCollections
+      .filter(c => c.payment_method !== 'Cash')
+      .reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0)
+  );
+
   // Summaries
   const creditSalesSum = creditCharges.reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
-  const creditPaymentsCashSum = creditPayments.filter(p => p.payment_method === 'CASH').reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
-  const creditPaymentsDigitalSum = creditPayments.filter(p => p.payment_method === 'ACCOUNT_TRANSFER').reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
+  const creditPaymentsCashSum = creditPayments.reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
 
   const expectedRevLive = getLiveExpectedRevenue();
   const reportedRevLive = (parseFloat(fuelCash) || 0) + (parseFloat(fuelDigital) || 0) + creditSalesSum;
   const shortageOverageLive = reportedRevLive - expectedRevLive;
-  const closingCashLive = parseFloat(session?.opening_cash_balance as any || 0) + (parseFloat(fuelCash) || 0) + creditPaymentsCashSum + (parseFloat(miscCash) || 0);
+  const totalDepositedLive = Object.values(cashDeposits).reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+  const closingCashLive = parseFloat(session?.opening_cash_balance as any || 0) + (parseFloat(fuelCash) || 0) + creditPaymentsCashSum + (parseFloat(miscCash) || 0) - totalDepositedLive;
+
+  // Live Paytm credited into account = today's Paytm 3 + yesterday's Paytm 1 & Paytm 2
+  const todayPaytm3 = parseFloat(fuelCollections.find(c => c.payment_method === 'Paytm 3')?.amount || '0') || 0;
+  const paytmCreditedLive = todayPaytm3 + yesterdayPaytm1 + yesterdayPaytm2;
 
   return (
     <div className="space-y-6 text-slate-800 animate-fadeIn">
@@ -605,6 +701,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <input
                       type="number"
                       step="0.01"
+                      min="0"
                       placeholder="Enter closing meter"
                       disabled={isClosed}
                       value={log.closing_reading}
@@ -709,6 +806,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <input
                       type="number"
                       placeholder="0"
+                      min="0"
+                      step="any"
                       disabled={isClosed}
                       value={log.fuel_received}
                       onChange={(e) => handleTankChange(tankIdx, 'fuel_received', e.target.value)}
@@ -720,6 +819,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <input
                       type="number"
                       placeholder="0"
+                      min="0"
+                      step="any"
                       disabled={isClosed}
                       value={log.testing_liters}
                       onChange={(e) => handleTankChange(tankIdx, 'testing_liters', e.target.value)}
@@ -731,6 +832,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <input
                       type="number"
                       placeholder="Enter dip volume"
+                      min="0"
+                      step="any"
                       disabled={isClosed}
                       value={log.actual_dip_volume}
                       onChange={(e) => handleTankChange(tankIdx, 'actual_dip_volume', e.target.value)}
@@ -884,6 +987,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                       <input
                         type="number"
                         placeholder="0.00"
+                        min="0.01"
+                        step="0.01"
                         value={chargeAmount}
                         onChange={(e) => setChargeAmount(e.target.value)}
                         className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
@@ -973,7 +1078,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                         <p className="font-bold text-slate-800">
                           {account?.account_name || `Account ID: ${tx.account_id}`}{' '}
                           <span className="text-[9px] font-bold text-slate-500 px-1.5 py-0.5 rounded-md bg-slate-200/60 border border-slate-300 ml-1.5 uppercase">
-                            {tx.payment_method === 'CASH' ? '💵 Cash' : '🏦 Bank'}
+                            💵 Cash
                           </span>
                         </p>
                         {tx.notes && <p className="text-[10px] text-slate-500 mt-0.5 italic">{tx.notes}</p>}
@@ -1017,6 +1122,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <input
                       type="number"
                       placeholder="0.00"
+                      min="0.01"
+                      step="0.01"
                       value={paymentAmount}
                       onChange={(e) => setPaymentAmount(e.target.value)}
                       className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
@@ -1026,7 +1133,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Notes / Reference</label>
                     <input
                       type="text"
-                      placeholder="e.g. UPI ref 902345"
+                      placeholder="e.g. ref 902345"
                       value={paymentNotes}
                       onChange={(e) => setPaymentNotes(e.target.value)}
                       className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs"
@@ -1034,30 +1141,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Payment Collection Method</label>
-                  <div className="grid grid-cols-2 gap-3 max-w-sm">
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('CASH')}
-                      className={`flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition-all ${paymentMethod === 'CASH' ? 'border-emerald-600 bg-emerald-55 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600 bg-white'}`}
-                    >
-                      💵 Cash collected
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('ACCOUNT_TRANSFER')}
-                      className={`flex items-center justify-center gap-2 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition-all ${paymentMethod === 'ACCOUNT_TRANSFER' ? 'border-emerald-600 bg-emerald-55 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600 bg-white'}`}
-                    >
-                      🏦 UPI / Bank Transfer
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-2 font-medium">
-                    {paymentMethod === 'CASH'
-                      ? 'ℹ Note: Cash payments automatically add to today\'s cashbook balance.'
-                      : 'ℹ Note: Bank Transfers record ledger changes but do not add to closing cash.'}
-                  </p>
-                </div>
+
 
                 {paymentError && <p className="text-xs text-rose-600 font-semibold">{paymentError}</p>}
 
@@ -1085,7 +1169,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   onClick={() => setOpenSection(5)}
                   className="py-2.5 px-4 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 shadow-2xs cursor-pointer"
                 >
-                  Continue to Misc →
+                  Continue to Other Items →
                 </button>
               </div>
             )}
@@ -1093,7 +1177,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         )}
       </section>
 
-      {/* Step 5: Miscellaneous Income */}
+      {/* Step 5: Other Items Income */}
       <section
         id="log-section-5"
         className={`scroll-mt-24 border bg-white rounded-3xl overflow-hidden transition-all shadow-xs ${openSection === 5 ? 'border-emerald-500/50 ring-4 ring-emerald-500/10' : 'border-slate-200/80'}`}
@@ -1103,42 +1187,32 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
           className="p-5 flex justify-between items-center cursor-pointer select-none bg-slate-50/50 hover:bg-slate-50 transition-all border-b border-transparent"
         >
           <div className="flex items-center gap-3">
-            <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-extrabold font-display ${isClosed || (parseFloat(miscCash) || parseFloat(miscDigital) || miscNotes) ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+            <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-extrabold font-display ${isClosed || (parseFloat(miscCash) || miscNotes) ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
               5
             </span>
             <div>
-              <h2 className="text-sm font-bold text-slate-900 font-display">Miscellaneous Income</h2>
+              <h2 className="text-sm font-bold text-slate-900 font-display">Other Items Income</h2>
               <p className="text-[10px] text-slate-500 mt-0.5">Lubricants, oil, or filter sales</p>
             </div>
           </div>
-          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md border ${isClosed ? 'bg-slate-100 text-slate-600 border-slate-200' : ((parseFloat(miscCash) || parseFloat(miscDigital)) ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200')}`}>
-            {isClosed ? 'Complete ✓' : ((parseFloat(miscCash) || parseFloat(miscDigital)) ? `₹${(parseFloat(miscCash) + parseFloat(miscDigital)).toFixed(0)}` : 'Empty')}
+          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md border ${isClosed ? 'bg-slate-100 text-slate-600 border-slate-200' : (parseFloat(miscCash) ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200')}`}>
+            {isClosed ? 'Complete ✓' : (parseFloat(miscCash) ? `₹${parseFloat(miscCash).toFixed(0)}` : 'Empty')}
           </span>
         </div>
 
         {openSection === 5 && (
           <div className="p-5 border-t border-slate-100 bg-white space-y-4 animate-fadeIn">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-wider mb-1.5">Misc Cash Income (₹)</label>
-                <input
-                  type="number"
-                  disabled={isClosed}
-                  value={miscCash}
-                  onChange={(e) => setMiscCash(e.target.value)}
-                  className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-555 uppercase tracking-wider mb-1.5">Misc Digital UPI Income (₹)</label>
-                <input
-                  type="number"
-                  disabled={isClosed}
-                  value={miscDigital}
-                  onChange={(e) => setMiscDigital(e.target.value)}
-                  className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
-                />
-              </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-wider mb-1.5">Other Items Income - Cash (₹)</label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                disabled={isClosed}
+                value={miscCash}
+                onChange={(e) => setMiscCash(e.target.value)}
+                className="w-full max-w-md rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+              />
             </div>
 
             <div>
@@ -1169,7 +1243,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
                   )}
-                  <span>{miscSaving ? 'Saving...' : 'Save Misc Income'}</span>
+                  <span>{miscSaving ? 'Saving...' : 'Save Other Items'}</span>
                 </button>
               </div>
             )}
@@ -1203,32 +1277,62 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         {openSection === 6 && (
           <div className="p-5 border-t border-slate-100 bg-white space-y-6 animate-fadeIn">
             <form onSubmit={handleCloseSession} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Fuel Cash Collected (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    placeholder="0.00"
-                    disabled={isClosed}
-                    value={fuelCash}
-                    onChange={(e) => setFuelCash(e.target.value)}
-                    className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Fuel Digital UPI Collected (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    placeholder="0.00"
-                    disabled={isClosed}
-                    value={fuelDigital}
-                    onChange={(e) => setFuelDigital(e.target.value)}
-                    className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
-                  />
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                {fuelCollections.map((col, idx) => (
+                  <div key={col.payment_method}>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} Collected (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="0.00"
+                      disabled={isClosed}
+                      value={col.amount}
+                      onChange={(e) => {
+                        const newCollections = [...fuelCollections];
+                        newCollections[idx].amount = e.target.value;
+                        setFuelCollections(newCollections);
+                      }}
+                      className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                    />
+                  </div>
+                ))}
               </div>
+
+              {/* Cash Deposits to Accounts */}
+              {pumpAccounts.filter(acc => acc.name !== "IOCL Account").length > 0 && (
+                <div className="space-y-4 pt-4 border-t border-slate-100">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-display">Cash Deposits to Accounts</h3>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Record cash deposited into linked custom accounts from the station's cash balance</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                    {pumpAccounts
+                      .filter(acc => acc.name !== "IOCL Account")
+                      .map((acc) => (
+                        <div key={acc.id}>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{acc.name} Deposit (₹)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="0.00"
+                            disabled={isClosed}
+                            value={cashDeposits[acc.id] || ''}
+                            onChange={(e) => {
+                              setCashDeposits(prev => ({
+                                ...prev,
+                                [acc.id]: e.target.value
+                              }));
+                            }}
+                            className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                          />
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
 
               {/* Calculation preview panel - Light theme styling */}
               <div className="p-5 rounded-2xl bg-slate-55 border border-slate-200 space-y-4 text-xs">
@@ -1248,8 +1352,19 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   </div>
 
                   <div className="flex justify-between text-[11px]">
-                    <span>Actual Fuel Cash + UPI Reported:</span>
+                    <span>Actual Fuel Collections:</span>
                     <span className="text-slate-900 font-bold">₹{((parseFloat(fuelCash) || 0) + (parseFloat(fuelDigital) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="space-y-1.5 pl-3 border-l border-slate-200/80 my-2">
+                    {fuelCollections.map((col) => {
+                      const amountVal = parseFloat(col.amount) || 0;
+                      return (
+                        <div key={col.payment_method} className="flex justify-between text-[10px] text-slate-500 font-semibold">
+                          <span>↳ {col.payment_method} Collected:</span>
+                          <span>₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="flex justify-between border-b border-slate-200/80 pb-2.5 text-[11px]">
                     <span>Credit Charges Slips Today:</span>
@@ -1284,10 +1399,17 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <span>+ Credit Payments (Cash Collected):</span>
                     <span className="text-slate-900 font-semibold">₹{creditPaymentsCashSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                  <div className="flex justify-between text-[11px] border-b border-slate-200/80 pb-2.5">
-                    <span>+ Misc Cash Collected:</span>
+                  <div className={`flex justify-between text-[11px] ${totalDepositedLive === 0 ? 'border-b border-slate-200/80 pb-2.5' : ''}`}>
+                    <span>+ Other Items Cash Collected:</span>
                     <span className="text-slate-900 font-semibold">₹{(parseFloat(miscCash) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
+
+                  {totalDepositedLive > 0 && (
+                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold border-b border-slate-200/80 pb-2.5">
+                      <span>- Cash Deposited to Accounts:</span>
+                      <span>-₹{totalDepositedLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs">
                     <span className="text-slate-705">Final Estimated Closing Cash Balance:</span>
@@ -1297,10 +1419,21 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
                 {/* Non-cash collection totals */}
                 <div className="text-[10px] text-slate-500 pt-2 flex flex-wrap gap-4 font-semibold border-t border-slate-200/60">
-                  <span>UPI/Digital Fuel: ₹{(parseFloat(fuelDigital) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  <span>UPI/Digital Credit Payments: ₹{creditPaymentsDigitalSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  <span>UPI/Digital Misc: ₹{(parseFloat(miscDigital) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span>Total Digital Fuel Sales: ₹{(parseFloat(fuelDigital) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
+
+                {/* Paytm credited into account */}
+                {paytmCreditedLive > 0 && (
+                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs text-[11px]">
+                    <div>
+                      <span className="text-slate-600">Paytm Credited Into Account Today:</span>
+                      <div className="text-[9px] text-slate-400 font-medium mt-0.5">
+                        Paytm 3 today (₹{todayPaytm3.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) + Paytm 1 yesterday (₹{yesterdayPaytm1.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) + Paytm 2 yesterday (₹{yesterdayPaytm2.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                      </div>
+                    </div>
+                    <span className="text-emerald-600 font-extrabold">₹{paytmCreditedLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
               </div>
 
               {closeError && <p className="text-xs text-rose-600 font-semibold">{closeError}</p>}

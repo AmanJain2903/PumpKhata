@@ -71,6 +71,9 @@ export interface PumpConfigResponse {
   nozzles: Nozzle[];
   products: Product[];
   credit_accounts: CreditAccount[];
+  pump_accounts: any[];
+  yesterday_paytm1: number;
+  yesterday_paytm2: number;
 }
 
 export const apiService = {
@@ -562,11 +565,11 @@ export const apiService = {
   /**
    * Add a single credit payment transaction.
    */
-  async addCreditPayment(sessionId: number, accountId: number, amount: number, paymentMethod: string, notes?: string): Promise<any> {
+  async addCreditPayment(sessionId: number, accountId: number, amount: number, paymentMethod?: string, notes?: string): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/credit-payment`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: accountId, amount, payment_method: paymentMethod, notes }),
+      body: JSON.stringify({ account_id: accountId, amount, payment_method: paymentMethod || 'CASH', notes }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -590,17 +593,17 @@ export const apiService = {
   },
 
   /**
-   * Save miscellaneous income.
+   * Save miscellaneous income (Other Items).
    */
-  async saveMiscIncome(sessionId: number, miscCash: number, miscDigital: number, miscNotes?: string): Promise<any> {
+  async saveMiscIncome(sessionId: number, miscCash: number, miscNotes?: string): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/misc`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ misc_cash: miscCash, misc_digital: miscDigital, misc_notes: miscNotes }),
+      body: JSON.stringify({ misc_cash: miscCash, misc_notes: miscNotes }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Failed to save miscellaneous income: ${response.statusText}`);
+      throw new Error(err.detail || `Failed to save other items income: ${response.statusText}`);
     }
     return await response.json();
   },
@@ -608,11 +611,18 @@ export const apiService = {
   /**
    * Close log session.
    */
-  async closeSession(sessionId: number, fuelCash: number, fuelDigital: number): Promise<any> {
+  async closeSession(
+    sessionId: number,
+    fuelCollections: { payment_method: string; amount: number }[],
+    cashDeposits?: { account_id: number; amount: number }[]
+  ): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/close`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fuel_cash_collected: fuelCash, fuel_digital_collected: fuelDigital }),
+      body: JSON.stringify({
+        fuel_collections: fuelCollections,
+        cash_deposits: cashDeposits
+      }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -646,6 +656,48 @@ export const apiService = {
       throw new Error(err.detail || `Failed to fetch prefill details: ${response.statusText}`);
     }
     return await response.json();
+  },
+
+  /**
+   * Fetch list of accounts for a specific pump.
+   */
+  async getPumpAccounts(pumpId: number): Promise<any[]> {
+    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/accounts`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch station accounts: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Create a new custom account for a specific pump.
+   */
+  async createPumpAccount(pumpId: number, name: string, isPaytmLinked: boolean = false): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, is_paytm_linked: isPaytmLinked }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create station account: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete a custom account for a specific pump.
+   */
+  async deletePumpAccount(pumpId: number, accountId: number): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/accounts/${accountId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete station account: ${response.statusText}`);
+    }
+    return true;
   },
 };
 
