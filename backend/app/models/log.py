@@ -1,7 +1,11 @@
 import enum
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy import Column, Integer, BigInteger, Numeric, Boolean, Date, DateTime, ForeignKey, UniqueConstraint, Enum as SQLEnum, Text, String
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Session
 from app.models.base import Base
+
+IST = ZoneInfo("Asia/Kolkata")
 
 class DailyLogSessionStatus(str, enum.Enum):
     OPEN = "OPEN"
@@ -48,6 +52,32 @@ class DailyLogSession(Base):
     collections = relationship("DailyLogSessionPayment", back_populates="session", cascade="all, delete-orphan")
     account_transactions = relationship("PumpAccountTransaction", back_populates="session", cascade="all, delete-orphan")
     price_change_records = relationship("PriceChangeGainLoss", back_populates="session", cascade="all, delete-orphan")
+
+    @classmethod
+    def get_next_valid_date(cls, db: Session, pump_id: int) -> date:
+        """
+        Determines the next sequential date that needs to be logged for a given pump.
+        """
+        last_session = db.query(cls).filter(
+            cls.pump_id == pump_id
+        ).order_by(cls.log_date.desc()).first()
+
+        today = datetime.now(IST).date()
+
+        if not last_session:
+            return today
+        
+        if last_session.status == DailyLogSessionStatus.OPEN:
+            return last_session.log_date
+            
+        # If the last session is CLOSED
+        if last_session.log_date >= today:
+            # All days up to today are logged and closed.
+            # We return last_session.log_date so that the UI can view/reopen today's session.
+            # We strictly DO NOT return tomorrow's date.
+            return last_session.log_date
+            
+        return last_session.log_date + timedelta(days=1)
 
 
 class DailyNozzleLog(Base):

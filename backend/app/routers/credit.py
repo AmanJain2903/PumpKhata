@@ -130,7 +130,7 @@ def record_transaction(
     from app.models.fuel_pump import FuelPump
 
     IST = ZoneInfo("Asia/Kolkata")
-    log_date = tx.log_date or datetime.now(IST).date()
+    log_date = DailyLogSession.get_next_valid_date(db, account.pump_id)
     log_timestamp = tx.log_timestamp or datetime.now(IST)
 
     # 1. Fetch or create today's daily log session

@@ -157,6 +157,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const anyModalOpen = isTankModalOpen || isDeletePumpModalOpen;
   useBodyScrollLock(anyModalOpen);
 
+  const [activeSessionDate, setActiveSessionDate] = useState<string | null>(null);
 
   useEffect(() => {
     fetchStationConfig();
@@ -1006,7 +1007,13 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
             {activeView === 'ops_log' ? (
               <p className="text-xs text-slate-500 mt-1 flex items-center gap-2 font-bold uppercase tracking-wider">
-                <span className="text-slate-700">{getISTDateString()}</span>
+                <span className={
+                  activeSessionDate && activeSessionDate < getISTDateString()
+                    ? 'px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md font-extrabold shadow-sm'
+                    : 'text-slate-700'
+                }>
+                  {activeSessionDate || getISTDateString()}
+                </span>
                 <span>•</span>
                 <span className={`rounded-md text-[9px] font-extrabold tracking-wide uppercase ${todayLogStatus === 'CLOSED' ? 'text-rose-700' : 'text-emerald-700'}`}>
                   {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : 'Open 🟢'}
@@ -1066,7 +1073,11 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
             pumpId={pumpId}
             onBack={() => {
               setActiveView('manage');
+              setActiveSessionDate(null);
               fetchStationConfig();
+            }}
+            onSessionLoaded={(session) => {
+              setActiveSessionDate(session.log_date);
             }}
           />
         ) : (

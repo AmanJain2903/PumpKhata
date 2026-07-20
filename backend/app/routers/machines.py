@@ -183,8 +183,8 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
     if not nozzle:
         raise HTTPException(status_code=404, detail="Nozzle not found")
 
-    target_date = payload.log_date or datetime.now(IST).date()
     pump_id = nozzle.machine.pump_id
+    target_date = DailyLogSession.get_next_valid_date(db, pump_id)
 
     # Find or create a log session for the pump on that target date
     session = db.query(DailyLogSession).filter(

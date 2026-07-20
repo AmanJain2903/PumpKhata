@@ -6,6 +6,7 @@ import { SmartDropdown } from '../components/SmartDropdown';
 interface DailyLogWorkspaceProps {
   pumpId: number;
   onBack: () => void;
+  onSessionLoaded?: (session: any) => void;
 }
 
 interface LocalNozzleLog {
@@ -43,7 +44,7 @@ const PAYMENT_METHODS = [
   'Miscellaneous'
 ];
 
-export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, onBack }) => {
+export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, onBack, onSessionLoaded }) => {
   // Session & Config state
   const [session, setSession] = useState<any>(null);
   const [nozzlesList, setNozzlesList] = useState<Nozzle[]>([]);
@@ -71,6 +72,17 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         return;
       }
       const timer = setTimeout(() => {
+        const isPastDate = session?.log_date && session?.log_date < getISTDateString() && session?.status === 'OPEN';
+        
+        // If we are opening section 1 and there is a past date warning, scroll to the warning instead so it's not cut off
+        if (openSection === 1 && isPastDate) {
+          const warningEl = document.getElementById('past-date-warning');
+          if (warningEl) {
+            warningEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+          }
+        }
+        
         const element = document.getElementById(`log-section-${openSection}`);
         if (element) {
           element.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -78,7 +90,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       }, 180);
       return () => clearTimeout(timer);
     }
-  }, [openSection]);
+  }, [openSection, session?.log_date]);
 
   // Form states per section
   // 1. Nozzle readings (Simple 1 entry per nozzle format)
@@ -184,6 +196,9 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       // 2. Fetch or create today's session in IST date
       const activeSession = await apiService.getOrCreateSession(pumpId, dateStr);
       setSession(activeSession);
+      if (onSessionLoaded) {
+        onSessionLoaded(activeSession);
+      }
 
       if (activeSession.account_transactions) {
         const depositsMap: { [accountId: number]: string } = {};
@@ -802,10 +817,24 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
     ? parseFloat(session.price_change_gain_loss_total)
     : getPriceChangeGainLossLive();
 
+  const isLoggingPastDate = session?.log_date && session?.log_date < getISTDateString() && session?.status === 'OPEN';
+
   return (
     <div className="space-y-6 text-slate-800 animate-fadeIn">
 
-
+      {isLoggingPastDate && (
+        <div id="past-date-warning" className="scroll-mt-24 p-4 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-3 shadow-sm animate-scaleIn">
+          <div className="mt-0.5">
+            <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          </div>
+          <div>
+            <h4 className="text-sm font-bold text-amber-800">Sequential Logging Enforced</h4>
+            <p className="text-xs text-amber-700/80 mt-1 font-medium leading-relaxed">
+              You are currently logging for a past date (<span className="font-bold">{session.log_date}</span>). The system requires days to be logged sequentially until you catch up to today.
+            </p>
+          </div>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-start gap-2.5 animate-scaleIn">
@@ -903,7 +932,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                         </label>
                       </div>
                     </div>
-                    
+
                     {/* New Price Section */}
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end pt-3 border-t border-slate-100">
                       <div className="md:col-span-2">
@@ -992,7 +1021,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                         </label>
                       </div>
                     </div>
-    
+
                     <div className="flex justify-end items-center pt-2 border-t border-slate-200/40">
                       <div className="text-right">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Liters Sold</span>

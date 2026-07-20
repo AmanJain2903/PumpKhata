@@ -314,11 +314,11 @@ def update_pump_config(
             ).order_by(DailyFinancialLog.log_date.desc()).first()
             opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump_obj.opening_cash_balance if pump_obj else Decimal("0.0"))
 
-        # Create session
         is_first_session = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
+        session_date = DailyLogSession.get_next_valid_date(db, pump_id)
         session = DailyLogSession(
             pump_id=pump_id,
-            log_date=now.date(),
+            log_date=session_date,
             status=DailyLogSessionStatus.OPEN,
             opened_at=now,
             opening_cash_balance=opening_cash,

@@ -51,7 +51,7 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
 
     # Create starting DailyTankLog entry
     now = datetime.now(IST)
-    target_date = tank.log_date or now.date()
+    target_date = DailyLogSession.get_next_valid_date(db, tank.pump_id)
 
     # Find or create a log session for the pump on that target date
     session = db.query(DailyLogSession).filter(
