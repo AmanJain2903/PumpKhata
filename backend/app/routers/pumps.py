@@ -23,7 +23,8 @@ def create_pump(pump: FuelPumpCreate, db: Session = Depends(get_db)):
     db_pump = FuelPump(
         name=pump.name,
         location=pump.location,
-        is_active=pump.is_active
+        is_active=pump.is_active,
+        opening_cash_balance=pump.opening_cash_balance
     )
     db.add(db_pump)
     db.commit()
@@ -243,6 +244,12 @@ def get_pump_config(pump_id: int, db: Session = Depends(get_db)):
             else:
                 yesterday_paytm2 = val or Decimal("0.0")
 
+    has_logs = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.status == "CLOSED",
+        DailyLogSession.is_initialization == False
+    ).first() is not None
+
     return {
         "pump": FuelPumpResponse.model_validate(pump),
         "tanks": tanks,
@@ -252,7 +259,8 @@ def get_pump_config(pump_id: int, db: Session = Depends(get_db)):
         "credit_accounts": credit_accounts,
         "pump_accounts": pump_accounts,
         "yesterday_paytm1": yesterday_paytm1,
-        "yesterday_paytm2": yesterday_paytm2
+        "yesterday_paytm2": yesterday_paytm2,
+        "has_logs": has_logs
     }
 
 @router.put("/{pump_id}/config", status_code=status.HTTP_200_OK)
@@ -269,13 +277,57 @@ def update_pump_config(
 
     from app.models.tank import Tank
     from app.models.machine import Machine, Nozzle
-    from app.models.log import DailyTankLog, DailyNozzleLog
+    from app.models.log import DailyTankLog, DailyNozzleLog, DailyLogSession, DailyLogSessionStatus, DailyFinancialLog
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from decimal import Decimal
 
     IST = ZoneInfo("Asia/Kolkata")
     now = datetime.now(IST)
+
+    # Get or create today's daily log session
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date == now.date()
+    ).first()
+
+    if session:
+        if session.status == DailyLogSessionStatus.CLOSED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot update station map layout because the daily session for today ({now.date()}) is already closed. Please reopen it first."
+            )
+    else:
+        # Get opening cash balance from last created session
+        last_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.log_date < now.date()
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
+        pump_obj = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
+        if last_session:
+            opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else last_session.opening_cash_balance
+        else:
+            prev_fin_log = db.query(DailyFinancialLog).filter(
+                DailyFinancialLog.pump_id == pump_id,
+                DailyFinancialLog.log_date < now.date()
+            ).order_by(DailyFinancialLog.log_date.desc()).first()
+            opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump_obj.opening_cash_balance if pump_obj else Decimal("0.0"))
+
+        # Create session
+        is_first_session = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
+        session = DailyLogSession(
+            pump_id=pump_id,
+            log_date=now.date(),
+            status=DailyLogSessionStatus.OPEN,
+            opened_at=now,
+            opening_cash_balance=opening_cash,
+            is_initialization=is_first_session,
+            misc_cash=Decimal("0.0"),
+            misc_digital=Decimal("0.0")
+        )
+        db.add(session)
+        db.flush()
 
     # Pre-fetch existing records to detect deletes
     existing_tanks = {t.id: t for t in pump.tanks}
@@ -313,6 +365,7 @@ def update_pump_config(
             last_tank_log = db.query(DailyTankLog).filter(DailyTankLog.tank_id == db_tank.id).order_by(DailyTankLog.log_timestamp.desc()).first()
             if not last_tank_log or last_tank_log.actual_dip_volume != tank_in.actual_dip_volume:
                 new_tank_log = DailyTankLog(
+                    session_id=session.id,
                     tank_id=db_tank.id,
                     log_date=now.date(),
                     log_timestamp=now,
@@ -341,6 +394,7 @@ def update_pump_config(
             
             # Create starting DailyTankLog entry
             start_tank_log = DailyTankLog(
+                session_id=session.id,
                 tank_id=db_tank.id,
                 log_date=now.date(),
                 log_timestamp=now,
@@ -390,11 +444,24 @@ def update_pump_config(
             # Resolve tank ID (could be database integer or temporary string ID)
             resolved_tank_id = None
             if isinstance(noz_in.tank_id, str):
-                if noz_in.tank_id not in tank_id_map:
-                    raise HTTPException(status_code=400, detail=f"Nozzle refers to unresolved tank temp ID: {noz_in.tank_id}")
-                resolved_tank_id = tank_id_map[noz_in.tank_id]
+                if noz_in.tank_id.startswith("temp-"):
+                    if noz_in.tank_id not in tank_id_map:
+                        raise HTTPException(status_code=400, detail=f"Nozzle refers to unresolved tank temp ID: {noz_in.tank_id}")
+                    resolved_tank_id = tank_id_map[noz_in.tank_id]
+                else:
+                    try:
+                        resolved_tank_id = int(noz_in.tank_id)
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail=f"Invalid tank ID: {noz_in.tank_id}")
             else:
                 resolved_tank_id = noz_in.tank_id
+
+            # Lookup active product price
+            price = Decimal("0.00")
+            if resolved_tank_id:
+                tank = db.query(Tank).filter(Tank.id == resolved_tank_id).first()
+                if tank and tank.product:
+                    price = tank.product.current_price or Decimal("0.00")
 
             if noz_in.id is not None:
                 # Update existing nozzle
@@ -410,7 +477,9 @@ def update_pump_config(
                 new_reading = noz_in.opening_reading or Decimal('0.00')
                 if not last_log or last_log.closing_reading != new_reading:
                     new_base_log = DailyNozzleLog(
+                        session_id=session.id,
                         nozzle_id=db_nozzle.id,
+                        product_price=price,
                         log_date=now.date(),
                         log_timestamp=now,
                         opening_reading=new_reading,
@@ -434,7 +503,9 @@ def update_pump_config(
                 
                 # Seed starting nozzle logs/reading
                 start_noz_log = DailyNozzleLog(
+                    session_id=session.id,
                     nozzle_id=db_nozzle.id,
+                    product_price=price,
                     log_date=now.date(),
                     log_timestamp=now,
                     opening_reading=noz_in.opening_reading or Decimal('0.00'),

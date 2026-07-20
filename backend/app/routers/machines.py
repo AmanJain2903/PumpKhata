@@ -199,14 +199,19 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
             DailyLogSession.log_date < target_date
         ).order_by(DailyLogSession.log_date.desc()).first()
 
-        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else Decimal("0.0")
+        pump = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
+        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else (pump.opening_cash_balance if pump else Decimal("0.0")))
 
+        session_status = DailyLogSessionStatus.CLOSED if target_date < datetime.now(IST).date() else DailyLogSessionStatus.OPEN
+
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
         session = DailyLogSession(
             pump_id=pump_id,
             log_date=target_date,
-            status=DailyLogSessionStatus.OPEN,
+            status=session_status,
             opened_at=datetime.now(IST),
-            opening_cash_balance=opening_cash
+            opening_cash_balance=opening_cash,
+            is_initialization=is_first
         )
         db.add(session)
         db.flush()

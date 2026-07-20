@@ -74,6 +74,7 @@ export interface PumpConfigResponse {
   pump_accounts: any[];
   yesterday_paytm1: number;
   yesterday_paytm2: number;
+  has_logs?: boolean;
 }
 
 export const apiService = {
@@ -91,11 +92,11 @@ export const apiService = {
   /**
    * Create a new fuel pump.
    */
-  async createPump(name: string, location: string): Promise<FuelPump> {
+  async createPump(name: string, location: string, openingCashBalance: number = 0): Promise<FuelPump> {
     const response = await fetch(`${API_BASE_URL}/pumps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, location, is_active: true }),
+      body: JSON.stringify({ name, location, is_active: true, opening_cash_balance: openingCashBalance }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -215,7 +216,7 @@ export const apiService = {
   /**
    * Create a new tank for a pump.
    */
-  async createTank(pumpId: number, productId: number, name: string, maxCapacity: number, actualDipVolume: number): Promise<Tank> {
+  async createTank(pumpId: number, productId: number, name: string, maxCapacity: number, actualDipVolume: number, logDate?: string): Promise<Tank> {
     const response = await fetch(`${API_BASE_URL}/tanks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -225,7 +226,8 @@ export const apiService = {
         name,
         max_capacity: maxCapacity,
         actual_dip_volume: actualDipVolume,
-        variance: 0
+        variance: 0,
+        log_date: logDate || null
       }),
     });
     if (!response.ok) {
@@ -614,14 +616,18 @@ export const apiService = {
   async closeSession(
     sessionId: number,
     fuelCollections: { payment_method: string; amount: number }[],
-    cashDeposits?: { account_id: number; amount: number }[]
+    cashDeposits?: { account_id: number; amount: number }[],
+    priorPeriodAdjustment?: number,
+    adjustmentNotes?: string
   ): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/operations/session/${sessionId}/close`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fuel_collections: fuelCollections,
-        cash_deposits: cashDeposits
+        cash_deposits: cashDeposits,
+        prior_period_adjustment: priorPeriodAdjustment || 0,
+        adjustment_notes: adjustmentNotes || null
       }),
     });
     if (!response.ok) {

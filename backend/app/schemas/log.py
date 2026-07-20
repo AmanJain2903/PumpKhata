@@ -163,6 +163,8 @@ class DailyLogSessionBase(BaseModel):
     misc_cash: Decimal = Decimal("0.0")
     misc_digital: Decimal = Decimal("0.0")
     misc_notes: Optional[str] = None
+    prior_period_adjustment: Decimal = Decimal("0.0")
+    adjustment_notes: Optional[str] = None
     closing_cash_balance: Optional[Decimal] = None
 
     @field_validator("opened_at", "closed_at", mode="after", check_fields=False)

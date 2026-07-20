@@ -62,6 +62,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
   // Step 1: Pump basics
   const [newPumpName, setNewPumpName] = useState('');
   const [newPumpLocation, setNewPumpLocation] = useState('');
+  const [newPumpOpeningCashBalance, setNewPumpOpeningCashBalance] = useState('0');
 
   // Step 2: Tanks list
   const [tanksList, setTanksList] = useState<TankInput[]>([
@@ -190,6 +191,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setWizardStep(1);
     setNewPumpName('');
     setNewPumpLocation('');
+    setNewPumpOpeningCashBalance('0');
     setTanksList([{ tempId: 't-1', name: 'Tank 1', maxCapacity: '20000', actualDipVolume: '10000', productId: '' }]);
     setMachinesList([
       {
@@ -294,26 +296,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
   // Machines / Nozzles actions
   const handleAddMachine = () => {
     setFormError('');
-    const nextIndex = machinesList.length + 1;
-    setMachinesList(prev => [
-      ...prev,
-      {
-        tempId: `m-${Date.now()}`,
-        name: `Dispenser ${nextIndex}`,
-        nozzles: [{ tempId: `n-${Date.now()}`, name: 'Nozzle 1', tankTempId: '', openingReading: '0' }]
-      }
-    ]);
+    setMachinesList(prev => {
+      const nextList = [
+        ...prev,
+        {
+          tempId: `m-${Date.now()}`,
+          name: '',
+          nozzles: [{ tempId: `n-${Date.now()}`, name: 'Nozzle 1', tankTempId: '', openingReading: '0' }]
+        }
+      ];
+      return nextList.map((m, idx) => ({
+        ...m,
+        name: `Dispenser ${idx + 1}`
+      }));
+    });
   };
 
   const handleRemoveMachine = (tempId: string) => {
     setFormError('');
     if (machinesList.length <= 1) return;
-    setMachinesList(prev => prev.filter(m => m.tempId !== tempId));
-  };
-
-  const updateMachineName = (tempId: string, name: string) => {
-    setFormError(''); // Clear error dynamically
-    setMachinesList(prev => prev.map(m => (m.tempId === tempId ? { ...m, name } : m)));
+    setMachinesList(prev => {
+      const filtered = prev.filter(m => m.tempId !== tempId);
+      return filtered.map((m, idx) => ({
+        ...m,
+        name: `Dispenser ${idx + 1}`
+      }));
+    });
   };
 
   const handleAddNozzle = (machTempId: string) => {
@@ -321,13 +329,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setMachinesList(prev =>
       prev.map(m => {
         if (m.tempId !== machTempId) return m;
-        const nextIndex = m.nozzles.length + 1;
+        const newNozzles = [
+          ...m.nozzles,
+          { tempId: `n-${Date.now()}`, name: '', tankTempId: '', openingReading: '0' }
+        ];
         return {
           ...m,
-          nozzles: [
-            ...m.nozzles,
-            { tempId: `n-${Date.now()}`, name: `Nozzle ${nextIndex}`, tankTempId: '', openingReading: '0' }
-          ]
+          nozzles: newNozzles.map((n, idx) => ({
+            ...n,
+            name: `Nozzle ${idx + 1}`
+          }))
         };
       })
     );
@@ -339,9 +350,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
       prev.map(m => {
         if (m.tempId !== machTempId) return m;
         if (m.nozzles.length <= 1) return m;
+        const filtered = m.nozzles.filter(n => n.tempId !== nozzleTempId);
         return {
           ...m,
-          nozzles: m.nozzles.filter(n => n.tempId !== nozzleTempId)
+          nozzles: filtered.map((n, idx) => ({
+            ...n,
+            name: `Nozzle ${idx + 1}`
+          }))
         };
       })
     );
@@ -373,6 +388,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     }
     if (!newPumpLocation.trim()) {
       setFormError('Station location/address is required');
+      return false;
+    }
+    const bal = parseFloat(newPumpOpeningCashBalance);
+    if (isNaN(bal) || bal < 0) {
+      setFormError('Initial cash balance must be a non-negative number');
       return false;
     }
     setFormError('');
@@ -470,10 +490,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setIsSubmitting(true);
     setFormError('');
 
+    // Calculate yesterday's date string in IST timezone to initialize base settings in a previous day session
+    const now = new Date();
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const yesterdayIst = new Date(utcTime + (5.5 * 3600000) - (24 * 3600000));
+    const yyyy = yesterdayIst.getFullYear();
+    const mm = String(yesterdayIst.getMonth() + 1).padStart(2, '0');
+    const dd = String(yesterdayIst.getDate()).padStart(2, '0');
+    const yesterdayStr = `${yyyy}-${mm}-${dd}`;
+
     try {
       // 1. Create Pump
       setSubmitProgress({ step: 1, text: 'Registering Station Profile...' });
-      const createdPump = await apiService.createPump(newPumpName, newPumpLocation);
+      const createdPump = await apiService.createPump(newPumpName, newPumpLocation, parseFloat(newPumpOpeningCashBalance) || 0);
       const newPumpId = createdPump.id;
 
       // 2. Create products registered inline
@@ -507,7 +536,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
           resolvedProductId,
           tankInput.name,
           capacity,
-          dipVolume
+          dipVolume,
+          yesterdayStr
         );
         tankTempIdToDbId[tankInput.tempId] = createdTank.id;
       }
@@ -535,7 +565,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
             text: `Seeding Base Meter Reading for ${createdMachine.name} — ${nozzleInput.name}...`
           });
           const readingValue = parseFloat(nozzleInput.openingReading) || 0;
-          await apiService.initializeNozzleReading(createdNozzle.id, readingValue);
+          await apiService.initializeNozzleReading(createdNozzle.id, readingValue, yesterdayStr);
         }
       }
 
@@ -913,6 +943,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                         className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-sm font-sans"
                       />
                     </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Initial Cash Book Balance (₹)</label>
+                      <input
+                        type="number"
+                        placeholder="0.00"
+                        min="0"
+                        step="any"
+                        value={newPumpOpeningCashBalance}
+                        onChange={(e) => { setNewPumpOpeningCashBalance(e.target.value); setFormError(''); }}
+                        className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-sm font-sans"
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -1103,12 +1146,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             <span className="text-xs font-bold text-slate-700 bg-slate-200/50 px-2 py-0.5 rounded-md font-display">
                               Dispenser #{index + 1}
                             </span>
-                            <input
-                              type="text"
-                              value={mach.name}
-                              onChange={(e) => updateMachineName(mach.tempId, e.target.value)}
-                              className="block bg-transparent border-b border-dashed border-slate-300 focus:border-emerald-500 focus:outline-none text-xs font-bold text-slate-800 py-0.5 px-1 max-w-[150px]"
-                            />
                           </div>
                           {machinesList.length > 1 && (
                             <button
@@ -1137,12 +1174,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             <div key={nozzle.tempId} className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end bg-white p-3 border border-slate-200 rounded-xl animate-fadeIn">
                               <div>
                                 <label className="text-[9px] font-bold text-slate-400 uppercase">Nozzle Name</label>
-                                <input
-                                  type="text"
-                                  value={nozzle.name}
-                                  onChange={(e) => updateNozzleField(mach.tempId, nozzle.tempId, 'name', e.target.value)}
-                                  className="mt-1 block w-full rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800"
-                                />
+                                <div className="mt-2 text-xs font-bold text-slate-800 pl-1">
+                                  {nozzle.name}
+                                </div>
                               </div>
 
                               <div>

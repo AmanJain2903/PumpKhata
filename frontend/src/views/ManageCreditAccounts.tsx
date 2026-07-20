@@ -34,7 +34,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
   const [txType, setTxType] = useState<'CHARGE' | 'PAYMENT'>('CHARGE');
   const [txAmount, setTxAmount] = useState('');
   const [txNotes, setTxNotes] = useState('');
-  const txPaymentMethod = 'CASH';
+  const [txPaymentMethod, setTxPaymentMethod] = useState<'CASH' | 'ACCOUNT_TRANSFER'>('CASH');
 
 
   const [formError, setFormError] = useState('');
@@ -148,6 +148,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
     setTxType('CHARGE');
     setTxAmount('');
     setTxNotes('');
+    setTxPaymentMethod('CASH');
     setFormError('');
     setIsTxModalOpen(true);
   };
@@ -490,6 +491,21 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
                   </label>
                 </div>
               </div>
+              {txType === 'PAYMENT' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider mb-2">Payment Method</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold cursor-pointer transition-all ${txPaymentMethod === 'CASH' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}>
+                      <input type="radio" name="txPaymentMethod" checked={txPaymentMethod === 'CASH'} onChange={() => setTxPaymentMethod('CASH')} className="sr-only" />
+                      <span>💵 Cash</span>
+                    </label>
+                    <label className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold cursor-pointer transition-all ${txPaymentMethod === 'ACCOUNT_TRANSFER' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}>
+                      <input type="radio" name="txPaymentMethod" checked={txPaymentMethod === 'ACCOUNT_TRANSFER'} onChange={() => setTxPaymentMethod('ACCOUNT_TRANSFER')} className="sr-only" />
+                      <span>🏛️ Account Transfer</span>
+                    </label>
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider">Amount (₹)</label>
                 <input type="number" step="0.01" placeholder="0.00" value={txAmount} onChange={(e) => setTxAmount(e.target.value)}

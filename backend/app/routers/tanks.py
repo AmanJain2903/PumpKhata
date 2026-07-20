@@ -51,7 +51,7 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
 
     # Create starting DailyTankLog entry
     now = datetime.now(IST)
-    target_date = now.date()
+    target_date = tank.log_date or now.date()
 
     # Find or create a log session for the pump on that target date
     session = db.query(DailyLogSession).filter(
@@ -66,14 +66,19 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
             DailyLogSession.log_date < target_date
         ).order_by(DailyLogSession.log_date.desc()).first()
 
-        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else Decimal("0.0")
+        pump = db.query(FuelPump).filter(FuelPump.id == tank.pump_id).first()
+        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else (pump.opening_cash_balance if pump else Decimal("0.0")))
 
+        session_status = DailyLogSessionStatus.CLOSED if target_date < now.date() else DailyLogSessionStatus.OPEN
+
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == tank.pump_id).first() is None
         session = DailyLogSession(
             pump_id=tank.pump_id,
             log_date=target_date,
-            status=DailyLogSessionStatus.OPEN,
+            status=session_status,
             opened_at=now,
-            opening_cash_balance=opening_cash
+            opening_cash_balance=opening_cash,
+            is_initialization=is_first
         )
         db.add(session)
         db.flush()

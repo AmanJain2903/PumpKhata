@@ -17,6 +17,9 @@ interface LocalNozzleLog {
   closing_reading: string;
   product_price: string;
   is_reset: boolean;
+  has_price_change: boolean;
+  old_price: string;
+  old_price_closing: string;
 }
 
 interface LocalTankLog {
@@ -37,7 +40,6 @@ const PAYMENT_METHODS = [
   'ICICI',
   'XTRA Power',
   'XTRA Reward',
-  'Cash',
   'Miscellaneous'
 ];
 
@@ -106,6 +108,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const [paymentAccountId, setPaymentAccountId] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'ACCOUNT_TRANSFER'>('CASH');
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
@@ -115,6 +118,10 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const [miscSaving, setMiscSaving] = useState(false);
   const [miscError, setMiscError] = useState('');
   const [miscSuccess, setMiscSuccess] = useState('');
+
+  // Prior Period Adjustments
+  const [priorPeriodAdjustment, setPriorPeriodAdjustment] = useState('');
+  const [adjustmentNotes, setAdjustmentNotes] = useState('');
 
   // 6. Close session collections
   const [fuelCollections, setFuelCollections] = useState<{ payment_method: string; amount: string }[]>(
@@ -149,7 +156,25 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       // 1. Fetch pump config layout (tanks, machines, nozzles, accounts)
       const config = await apiService.getPumpConfig(pumpId);
 
-      const activeNozzles = config.nozzles.filter((nz: Nozzle) => nz.is_active !== false);
+      const extractNumber = (str: string): number => {
+        const match = str.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+
+      const sortedNozzles = [...config.nozzles.filter((nz: Nozzle) => nz.is_active !== false)].sort((a, b) => {
+        const machA = config.machines?.find((m: any) => m.id === a.machine_id);
+        const machB = config.machines?.find((m: any) => m.id === b.machine_id);
+        const machANum = extractNumber(machA ? machA.name : '');
+        const machBNum = extractNumber(machB ? machB.name : '');
+        if (machANum !== machBNum) {
+          return machANum - machBNum;
+        }
+        const nozzleANum = extractNumber(a.name);
+        const nozzleBNum = extractNumber(b.name);
+        return nozzleANum - nozzleBNum;
+      });
+
+      const activeNozzles = sortedNozzles;
       setNozzlesList(activeNozzles);
       setCreditAccounts(config.credit_accounts);
       setPumpAccounts(config.pump_accounts || []);
@@ -178,12 +203,21 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       // Prefill Section 1: Nozzle Readings
       const activeNozzleLogs = activeSession.nozzle_logs || [];
       const initNozzleLogs: LocalNozzleLog[] = activeNozzles.map((nz: Nozzle) => {
-        const matchingLog = activeNozzleLogs.find((l: any) => l.nozzle_id === nz.id);
+        // Find ALL matching logs for this nozzle (could be 2 entries on price change day)
+        const matchingLogs = activeNozzleLogs
+          .filter((l: any) => l.nozzle_id === nz.id)
+          .sort((a: any, b: any) => a.entry_index - b.entry_index);
+        const matchingLog = matchingLogs.length > 0 ? matchingLogs[matchingLogs.length - 1] : null;
+        const oldPriceLog = matchingLogs.length > 1 ? matchingLogs[0] : null;
+
         const prefillNz = prefill.nozzles.find((n: any) => n.nozzle_id === nz.id);
         const baseOpening = prefillNz ? parseFloat(prefillNz.opening_reading as any) : 0;
 
         const machine = config.machines?.find((m: any) => m.id === nz.machine_id);
         const machineName = machine ? machine.name : 'Dispenser';
+
+        const hasPriceChange = prefillNz?.has_price_change || false;
+        const oldPrice = prefillNz?.old_price ? String(prefillNz.old_price) : '';
 
         return {
           nozzle_id: nz.id,
@@ -194,7 +228,10 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
           closing_reading: matchingLog ? String(matchingLog.closing_reading) : '',
           // Always read price from the main product configuration
           product_price: String(prefillNz?.product_price || nz.product_price || 0),
-          is_reset: matchingLog ? matchingLog.is_reset : false
+          is_reset: matchingLog ? matchingLog.is_reset : false,
+          has_price_change: hasPriceChange,
+          old_price: oldPrice,
+          old_price_closing: oldPriceLog ? String(oldPriceLog.closing_reading) : ''
         };
       });
       setNozzleLogs(initNozzleLogs);
@@ -227,6 +264,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       // Prefill Section 5: Other Items
       setMiscCash(String(activeSession.misc_cash || '0'));
       setMiscNotes(activeSession.misc_notes || '');
+      setPriorPeriodAdjustment(activeSession.prior_period_adjustment ? String(activeSession.prior_period_adjustment) : '');
+      setAdjustmentNotes(activeSession.adjustment_notes || '');
 
       // Prefill Section 6: Fuel Close collections
       const sessionPayments = activeSession.collections || [];
@@ -247,7 +286,28 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   };
 
   // Helper to calculate total nozzle dispensed liters per nozzle row
+  const getNozzleDispensedOld = (log: LocalNozzleLog): number => {
+    if (!log.has_price_change) return 0;
+    const oldClosing = parseFloat(log.old_price_closing);
+    if (isNaN(oldClosing)) return 0;
+    if (log.is_reset) return oldClosing;
+    if (oldClosing < log.original_opening) return 0;
+    return oldClosing - log.original_opening;
+  };
+
+  const getNozzleDispensedNew = (log: LocalNozzleLog): number => {
+    if (!log.has_price_change) return 0;
+    const oldClosing = parseFloat(log.old_price_closing);
+    const newClosing = parseFloat(log.closing_reading);
+    if (isNaN(oldClosing) || isNaN(newClosing)) return 0;
+    if (newClosing < oldClosing) return 0;
+    return newClosing - oldClosing;
+  };
+
   const getNozzleDispensed = (log: LocalNozzleLog): number => {
+    if (log.has_price_change) {
+      return getNozzleDispensedOld(log) + getNozzleDispensedNew(log);
+    }
     const closing = parseFloat(log.closing_reading);
     if (isNaN(closing)) return 0;
 
@@ -261,34 +321,59 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   };
 
   // Live expected revenue preview
+  // Live expected revenue preview
   const getLiveExpectedRevenue = (): number => {
-    let expected = 0;
-    // Nozzle sales contribution
-    for (const nLog of nozzleLogs) {
-      const closing = parseFloat(nLog.closing_reading);
-      const price = parseFloat(nLog.product_price);
-      if (isNaN(closing) || isNaN(price)) continue;
+    let totalExpected = 0;
 
-      let dispensed = 0;
-      if (nLog.is_reset) {
-        dispensed = closing;
-      } else if (closing >= nLog.original_opening) {
-        dispensed = closing - nLog.original_opening;
+    const uniqueTankIds = Array.from(new Set(nozzlesList.map(n => n.tank_id)));
+
+    for (const tankId of uniqueTankIds) {
+      if (!tankId) continue;
+      let tankRevenue = 0;
+
+      const tankNozzles = nozzlesList.filter(n => n.tank_id === tankId);
+      const tankNozzleIds = new Set(tankNozzles.map(n => n.id));
+
+      for (const nLog of nozzleLogs) {
+        if (!tankNozzleIds.has(nLog.nozzle_id)) continue;
+
+        if (nLog.has_price_change) {
+          const oldPrice = parseFloat(nLog.old_price);
+          const newPrice = parseFloat(nLog.product_price);
+          if (!isNaN(oldPrice)) {
+            tankRevenue += getNozzleDispensedOld(nLog) * oldPrice;
+          }
+          if (!isNaN(newPrice)) {
+            tankRevenue += getNozzleDispensedNew(nLog) * newPrice;
+          }
+        } else {
+          const closing = parseFloat(nLog.closing_reading);
+          const price = parseFloat(nLog.product_price);
+          if (!isNaN(closing) && !isNaN(price)) {
+            let dispensed = 0;
+            if (nLog.is_reset) {
+              dispensed = closing;
+            } else if (closing >= nLog.original_opening) {
+              dispensed = closing - nLog.original_opening;
+            }
+            tankRevenue += dispensed * price;
+          }
+        }
       }
-      expected += dispensed * price;
+
+      const tLog = tankLogs.find(t => t.tank_id === tankId);
+      if (tLog) {
+        const testing = parseFloat(tLog.testing_liters);
+        if (!isNaN(testing) && testing > 0) {
+          const productPrice = tankNozzles.length > 0 ? parseFloat(tankNozzles[0].product_price as any || 0) : 0;
+          tankRevenue -= testing * productPrice;
+        }
+      }
+
+      totalExpected += Math.round(tankRevenue);
     }
 
-    // Deduct testing liters
-    for (const tLog of tankLogs) {
-      const testing = parseFloat(tLog.testing_liters);
-      if (isNaN(testing) || testing <= 0) continue;
-
-      const matchingNozzle = nozzlesList.find(n => n.tank_id === tLog.tank_id);
-      const productPrice = matchingNozzle ? parseFloat(matchingNozzle.product_price as any || 0) : 0;
-      expected -= testing * productPrice;
-    }
-
-    return expected;
+    return totalExpected;
   };
 
   // Handlers for Section 1: Nozzle Readings
@@ -309,27 +394,68 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
     setNozzleSaving(true);
     try {
       const payload = nozzleLogs.map((log) => {
-        const closing = parseFloat(log.closing_reading);
         const price = parseFloat(log.product_price);
-        if (isNaN(closing) || closing < 0) {
-          throw new Error(`Invalid closing reading for Nozzle: ${log.nozzle_name}`);
-        }
-        if (closing < log.original_opening && !log.is_reset) {
-          throw new Error(`Closing reading cannot be lower than opening reading (${log.original_opening}) for Nozzle ${log.nozzle_name} unless Reset is toggled.`);
-        }
         if (isNaN(price) || price < 0) {
           throw new Error(`Invalid price for Nozzle: ${log.nozzle_name}`);
         }
-        return {
-          nozzle_id: log.nozzle_id,
-          entries: [
-            {
-              closing_reading: closing,
-              product_price: price,
-              is_reset: log.is_reset
-            }
-          ]
-        };
+
+        if (log.has_price_change) {
+          // Split reading: old price closing + new price closing
+          const oldClosing = parseFloat(log.old_price_closing);
+          const newClosing = parseFloat(log.closing_reading);
+          const oldPrice = parseFloat(log.old_price);
+
+          if (isNaN(oldClosing) || oldClosing < 0) {
+            throw new Error(`Invalid old-price closing reading for Nozzle: ${log.nozzle_name}`);
+          }
+          if (isNaN(newClosing) || newClosing < 0) {
+            throw new Error(`Invalid new-price closing reading for Nozzle: ${log.nozzle_name}`);
+          }
+          if (oldClosing < log.original_opening && !log.is_reset) {
+            throw new Error(`Old-price closing reading cannot be lower than opening (${log.original_opening}) for Nozzle ${log.nozzle_name} unless Reset is toggled.`);
+          }
+          if (newClosing < oldClosing) {
+            throw new Error(`New-price closing reading (${newClosing}) cannot be lower than old-price closing (${oldClosing}) for Nozzle ${log.nozzle_name}.`);
+          }
+          if (isNaN(oldPrice) || oldPrice < 0) {
+            throw new Error(`Invalid old price for Nozzle: ${log.nozzle_name}`);
+          }
+
+          return {
+            nozzle_id: log.nozzle_id,
+            entries: [
+              {
+                closing_reading: oldClosing,
+                product_price: oldPrice,
+                is_reset: log.is_reset
+              },
+              {
+                closing_reading: newClosing,
+                product_price: price,
+                is_reset: false
+              }
+            ]
+          };
+        } else {
+          // Normal single reading
+          const closing = parseFloat(log.closing_reading);
+          if (isNaN(closing) || closing < 0) {
+            throw new Error(`Invalid closing reading for Nozzle: ${log.nozzle_name}`);
+          }
+          if (closing < log.original_opening && !log.is_reset) {
+            throw new Error(`Closing reading cannot be lower than opening reading (${log.original_opening}) for Nozzle ${log.nozzle_name} unless Reset is toggled.`);
+          }
+          return {
+            nozzle_id: log.nozzle_id,
+            entries: [
+              {
+                closing_reading: closing,
+                product_price: price,
+                is_reset: log.is_reset
+              }
+            ]
+          };
+        }
       });
 
       await apiService.saveNozzleReadings(session.id, payload);
@@ -357,9 +483,14 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       const actual = parseFloat(updated[tankIdx].actual_dip_volume) || 0;
       const testing = parseFloat(updated[tankIdx].testing_liters) || 0;
 
-      const matchingNozzle = nozzlesList.find(n => n.tank_id === updated[tankIdx].tank_id);
-      const nozzleLog = matchingNozzle ? nozzleLogs.find(nl => nl.nozzle_id === matchingNozzle.id) : null;
-      const grossDispensed = nozzleLog ? getNozzleDispensed(nozzleLog) : 0;
+      const matchingNozzles = nozzlesList.filter(n => n.tank_id === updated[tankIdx].tank_id);
+      let grossDispensed = 0;
+      for (const nozzle of matchingNozzles) {
+        const nozzleLog = nozzleLogs.find(nl => nl.nozzle_id === nozzle.id);
+        if (nozzleLog) {
+          grossDispensed += getNozzleDispensed(nozzleLog);
+        }
+      }
 
       const bookStock = opening + received - grossDispensed + testing;
       updated[tankIdx].calculated_variance = actual - bookStock;
@@ -478,11 +609,12 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
     setPaymentSaving(true);
     try {
-      const newTx = await apiService.addCreditPayment(session.id, parseInt(paymentAccountId), amt, 'CASH', paymentNotes.trim() || undefined);
+      const newTx = await apiService.addCreditPayment(session.id, parseInt(paymentAccountId), amt, paymentMethod, paymentNotes.trim() || undefined);
       setCreditPayments(prev => [newTx, ...prev]);
 
       setPaymentAmount('');
       setPaymentNotes('');
+      setPaymentMethod('CASH');
       setPaymentAccountId('');
 
       const config = await apiService.getPumpConfig(pumpId);
@@ -554,8 +686,10 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
     }
 
     // Calculate cash available before deposits
-    const fuelCashVal = collectionsPayload.find(c => c.payment_method === 'Cash')?.amount || 0;
-    const maxCashAvailable = parseFloat(session?.opening_cash_balance as any || 0) + fuelCashVal + creditPaymentsCashSum + (parseFloat(miscCash) || 0);
+    const fuelDigitalVal = collectionsPayload.filter(c => c.payment_method !== 'Miscellaneous').reduce((acc, curr) => acc + curr.amount, 0);
+    const miscExpenditureVal = collectionsPayload.find(c => c.payment_method === 'Miscellaneous')?.amount || 0;
+    const fuelCashVal = expectedRevLive - creditSalesSum - fuelDigitalVal;
+    const maxCashAvailable = parseFloat(session?.opening_cash_balance as any || 0) + fuelCashVal + creditPaymentsCashSum + (parseFloat(miscCash) || 0) - miscExpenditureVal;
 
     // Prepare cash deposits payload
     const depositsPayload = [];
@@ -583,7 +717,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
     setCloseSaving(true);
     try {
-      await apiService.closeSession(session.id, collectionsPayload, depositsPayload);
+      const adjAmount = priorPeriodAdjustment.trim() ? parseFloat(priorPeriodAdjustment) : 0;
+      await apiService.closeSession(session.id, collectionsPayload, depositsPayload, adjAmount, adjustmentNotes.trim() || undefined);
       setSuccessMsg('Day logged and locked successfully! Redirecting...');
 
       setTimeout(() => {
@@ -612,27 +747,60 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
   const isClosed = session?.status === 'CLOSED';
 
-  // Derived fuel cash and digital from dynamic collections state
-  const fuelCash = fuelCollections.find(c => c.payment_method === 'Cash')?.amount || '';
-  const fuelDigital = String(
-    fuelCollections
-      .filter(c => c.payment_method !== 'Cash')
-      .reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0)
-  );
+  // Derived fuel cash and digital from dynamic collections state (Cash is auto-calculated)
+  const fuelDigitalVal = fuelCollections.filter(c => c.payment_method !== 'Miscellaneous').reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0);
+  const creditSalesSum = creditCharges.reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
+  const creditPaymentsCashSum = creditPayments.filter(p => p.payment_method === 'CASH').reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
+  const expectedRevLive = getLiveExpectedRevenue();
+
+  const fuelCashVal = expectedRevLive - creditSalesSum - fuelDigitalVal;
+  const fuelCash = String(fuelCashVal);
+  const miscExpenditureLive = parseFloat(fuelCollections.find(c => c.payment_method === 'Miscellaneous')?.amount || '0') || 0;
 
   // Summaries
-  const creditSalesSum = creditCharges.reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
-  const creditPaymentsCashSum = creditPayments.reduce((acc, curr) => acc + parseFloat(curr.amount as any), 0);
-
-  const expectedRevLive = getLiveExpectedRevenue();
-  const reportedRevLive = (parseFloat(fuelCash) || 0) + (parseFloat(fuelDigital) || 0) + creditSalesSum;
-  const shortageOverageLive = reportedRevLive - expectedRevLive;
   const totalDepositedLive = Object.values(cashDeposits).reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
-  const closingCashLive = parseFloat(session?.opening_cash_balance as any || 0) + (parseFloat(fuelCash) || 0) + creditPaymentsCashSum + (parseFloat(miscCash) || 0) - totalDepositedLive;
+  const closingCashLive = parseFloat(session?.opening_cash_balance as any || 0) + fuelCashVal + creditPaymentsCashSum + (parseFloat(miscCash) || 0) - miscExpenditureLive - totalDepositedLive + (parseFloat(priorPeriodAdjustment) || 0);
 
   // Live Paytm credited into account = today's Paytm 3 + yesterday's Paytm 1 & Paytm 2
   const todayPaytm3 = parseFloat(fuelCollections.find(c => c.payment_method === 'Paytm 3')?.amount || '0') || 0;
   const paytmCreditedLive = todayPaytm3 + yesterdayPaytm1 + yesterdayPaytm2;
+
+  const getPriceChangeGainLossLive = (): number => {
+    let totalGainLoss = 0;
+    const uniqueProducts = Array.from(new Set(nozzleLogs.map(log => log.product_name)));
+    for (const prodName of uniqueProducts) {
+      const productNozzles = nozzleLogs.filter(n => n.product_name === prodName && n.has_price_change);
+      if (productNozzles.length === 0) continue;
+
+      const oldPrice = parseFloat(productNozzles[0].old_price || '0');
+      const newPrice = parseFloat(productNozzles[0].product_price || '0');
+      if (isNaN(oldPrice) || isNaN(newPrice) || oldPrice === newPrice) continue;
+
+      const productTanks = new Set(productNozzles.map(nl => nozzlesList.find(n => n.id === nl.nozzle_id)?.tank_id));
+
+      for (const tankId of productTanks) {
+        if (!tankId) continue;
+        const matchingNozzlesForTank = productNozzles.filter(nl => nozzlesList.find(n => n.id === nl.nozzle_id)?.tank_id === tankId);
+
+        let fuelSoldOld = 0;
+        for (const nl of matchingNozzlesForTank) {
+          fuelSoldOld += getNozzleDispensedOld(nl);
+        }
+
+        const tLog = tankLogs.find(tl => tl.tank_id === tankId);
+        const openingDip = tLog ? parseFloat(tLog.opening_dip as any || 0) : 0;
+
+        const stockAtChange = openingDip - fuelSoldOld;
+        const gainLoss = (newPrice - oldPrice) * stockAtChange;
+        totalGainLoss += gainLoss;
+      }
+    }
+    return totalGainLoss;
+  };
+
+  const priceChangeGainLossLive = session?.price_change_gain_loss_total != null
+    ? parseFloat(session.price_change_gain_loss_total)
+    : getPriceChangeGainLossLive();
 
   return (
     <div className="space-y-6 text-slate-800 animate-fadeIn">
@@ -693,52 +861,146 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end pt-3 border-t border-slate-200/50">
-                  <div className="md:col-span-2">
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                      Closing Reading
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      placeholder="Enter closing meter"
-                      disabled={isClosed}
-                      value={log.closing_reading}
-                      onChange={(e) => handleNozzleChange(nozzleIdx, 'closing_reading', e.target.value)}
-                      className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Rate (₹/L)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      disabled={true}
-                      value={log.product_price}
-                      className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-500 focus:outline-none transition-all text-xs font-bold font-sans"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2 pb-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] font-bold text-slate-655">
-                      <input
-                        type="checkbox"
-                        disabled={isClosed}
-                        checked={log.is_reset}
-                        onChange={(e) => handleNozzleChange(nozzleIdx, 'is_reset', e.target.checked)}
-                        className="rounded border-slate-300 text-emerald-600 bg-white focus:ring-0"
-                      />
-                      <span>Reset</span>
-                    </label>
-                  </div>
-                </div>
+                {log.has_price_change ? (
+                  <div className="space-y-4">
+                    {/* Old Price Section */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end pt-3 border-t border-slate-200/50">
+                      <div className="md:col-span-2">
+                        <label className="block text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                          Closing at Old Price
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Enter old price closing meter"
+                          disabled={isClosed}
+                          value={log.old_price_closing}
+                          onChange={(e) => handleNozzleChange(nozzleIdx, 'old_price_closing', e.target.value)}
+                          className="w-full rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 focus:outline-none transition-all text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Old Rate (₹/L)</label>
+                        <input
+                          type="number"
+                          disabled={true}
+                          value={log.old_price}
+                          className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-500 focus:outline-none transition-all text-xs font-bold font-sans opacity-70"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pb-2">
+                        <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] font-bold text-slate-655">
+                          <input
+                            type="checkbox"
+                            disabled={isClosed}
+                            checked={log.is_reset}
+                            onChange={(e) => handleNozzleChange(nozzleIdx, 'is_reset', e.target.checked)}
+                            className="rounded border-slate-300 text-emerald-600 bg-white focus:ring-0"
+                          />
+                          <span>Reset</span>
+                        </label>
+                      </div>
+                    </div>
+                    
+                    {/* New Price Section */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end pt-3 border-t border-slate-100">
+                      <div className="md:col-span-2">
+                        <label className="block text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                          Closing at New Price
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Enter final closing meter"
+                          disabled={isClosed}
+                          value={log.closing_reading}
+                          onChange={(e) => handleNozzleChange(nozzleIdx, 'closing_reading', e.target.value)}
+                          className="w-full rounded-xl bg-emerald-50/30 border border-emerald-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">New Rate (₹/L)</label>
+                        <input
+                          type="number"
+                          disabled={true}
+                          value={log.product_price}
+                          className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-800 font-bold focus:outline-none transition-all text-xs font-sans"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pb-2">
+                        <span className="text-[10px] font-bold text-slate-400">Opening: {log.old_price_closing || 0}</span>
+                      </div>
+                    </div>
 
-                <div className="flex justify-end items-center pt-2 border-t border-slate-200/40">
-                  <div className="text-right">
-                    <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Liters Sold</span>
-                    <span className="text-xs font-extrabold text-emerald-600">{getNozzleDispensed(log).toFixed(2)} L</span>
+                    <div className="flex justify-end items-center pt-2 border-t border-slate-200/40 gap-4">
+                      <div className="text-right border-r border-slate-200 pr-4">
+                        <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Old Price L</span>
+                        <span className="text-xs font-bold text-amber-600">{getNozzleDispensedOld(log).toFixed(2)} L</span>
+                      </div>
+                      <div className="text-right border-r border-slate-200 pr-4">
+                        <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">New Price L</span>
+                        <span className="text-xs font-bold text-emerald-600">{getNozzleDispensedNew(log).toFixed(2)} L</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Total Sold</span>
+                        <span className="text-xs font-extrabold text-slate-800">{getNozzleDispensed(log).toFixed(2)} L</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end pt-3 border-t border-slate-200/50">
+                      <div className="md:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                          Closing Reading
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Enter closing meter"
+                          disabled={isClosed}
+                          value={log.closing_reading}
+                          onChange={(e) => handleNozzleChange(nozzleIdx, 'closing_reading', e.target.value)}
+                          className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Rate (₹/L)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          disabled={true}
+                          value={log.product_price}
+                          className="w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-500 focus:outline-none transition-all text-xs font-bold font-sans"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pb-2">
+                        <label className="flex items-center gap-2 cursor-pointer select-none text-[10px] font-bold text-slate-655">
+                          <input
+                            type="checkbox"
+                            disabled={isClosed}
+                            checked={log.is_reset}
+                            onChange={(e) => handleNozzleChange(nozzleIdx, 'is_reset', e.target.checked)}
+                            className="rounded border-slate-300 text-emerald-600 bg-white focus:ring-0"
+                          />
+                          <span>Reset</span>
+                        </label>
+                      </div>
+                    </div>
+    
+                    <div className="flex justify-end items-center pt-2 border-t border-slate-200/40">
+                      <div className="text-right">
+                        <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Liters Sold</span>
+                        <span className="text-xs font-extrabold text-emerald-600">{getNozzleDispensed(log).toFixed(2)} L</span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
 
@@ -1077,8 +1339,8 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                       <div>
                         <p className="font-bold text-slate-800">
                           {account?.account_name || `Account ID: ${tx.account_id}`}{' '}
-                          <span className="text-[9px] font-bold text-slate-500 px-1.5 py-0.5 rounded-md bg-slate-200/60 border border-slate-300 ml-1.5 uppercase">
-                            💵 Cash
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md border ml-1.5 uppercase ${tx.payment_method === 'CASH' ? 'text-slate-500 bg-slate-200/60 border-slate-300' : 'text-emerald-700 bg-emerald-50 border-emerald-200'}`}>
+                            {tx.payment_method === 'CASH' ? '💵 Cash' : '🏛️ Account'}
                           </span>
                         </p>
                         {tx.notes && <p className="text-[10px] text-slate-500 mt-0.5 italic">{tx.notes}</p>}
@@ -1104,7 +1366,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
                 <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block border-b border-slate-200 pb-2">Record Client Payment Received</span>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Select Client</label>
                     <SmartDropdown
@@ -1127,6 +1389,18 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                       value={paymentAmount}
                       onChange={(e) => setPaymentAmount(e.target.value)}
                       className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Payment Method</label>
+                    <SmartDropdown
+                      value={paymentMethod}
+                      onChange={(val) => setPaymentMethod(val as any)}
+                      options={[
+                        { value: 'CASH', label: '💵 Cash' },
+                        { value: 'ACCOUNT_TRANSFER', label: '🏛️ Account Transfer' }
+                      ]}
+                      placeholder="Select payment method..."
                     />
                   </div>
                   <div>
@@ -1266,7 +1540,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
             </span>
             <div>
               <h2 className="text-sm font-bold text-slate-900 font-display">Financial Reconciliation</h2>
-              <p className="text-[10px] text-slate-500 mt-0.5">Expected revenues vs. actual collections</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">Revenues vs. actual collections</p>
             </div>
           </div>
           <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md border ${isClosed ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
@@ -1280,7 +1554,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 {fuelCollections.map((col, idx) => (
                   <div key={col.payment_method}>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} Collected (₹)</label>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} (₹)</label>
                     <input
                       type="number"
                       min="0"
@@ -1332,6 +1606,38 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   </div>
                 </div>
               )}
+              {/* Prior Day Corrections */}
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-display">Prior Day Corrections / Adjustments</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Account for cash shortages/overages discovered from previous days (+ / -)</p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Adjustment Amount (₹)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="e.g. -500 or 1000"
+                      disabled={isClosed}
+                      value={priorPeriodAdjustment}
+                      onChange={(e) => setPriorPeriodAdjustment(e.target.value)}
+                      className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Reason / Notes</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Found yesterday's missing 500 note"
+                      disabled={isClosed}
+                      value={adjustmentNotes}
+                      onChange={(e) => setAdjustmentNotes(e.target.value)}
+                      className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-medium"
+                    />
+                  </div>
+                </div>
+              </div>
 
 
               {/* Calculation preview panel - Light theme styling */}
@@ -1341,7 +1647,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                 {/* Top block: sales */}
                 <div className="space-y-2.5 font-semibold text-slate-700">
                   <div className="flex justify-between">
-                    <span>Expected Fuel Revenue:</span>
+                    <span>Fuel Revenue (Total Sales):</span>
                     <span className="text-slate-900 font-bold">₹{expectedRevLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between border-b border-slate-200/80 pb-2.5">
@@ -1352,40 +1658,38 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                   </div>
 
                   <div className="flex justify-between text-[11px]">
-                    <span>Actual Fuel Collections:</span>
-                    <span className="text-slate-900 font-bold">₹{((parseFloat(fuelCash) || 0) + (parseFloat(fuelDigital) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <span>Non-Cash Deductions / Expenditures:</span>
                   </div>
                   <div className="space-y-1.5 pl-3 border-l border-slate-200/80 my-2">
-                    {fuelCollections.map((col) => {
+                    {fuelCollections.filter(col => col.payment_method !== 'Miscellaneous').map((col) => {
                       const amountVal = parseFloat(col.amount) || 0;
+                      if (amountVal === 0) return null;
                       return (
-                        <div key={col.payment_method} className="flex justify-between text-[10px] text-slate-500 font-semibold">
-                          <span>↳ {col.payment_method} Collected:</span>
-                          <span>₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <div key={col.payment_method} className="flex justify-between text-[10px] text-rose-600 font-semibold">
+                          <span>↳ {col.payment_method}:</span>
+                          <span>-₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       );
                     })}
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200/80 pb-2.5 text-[11px]">
-                    <span>Credit Charges Slips Today:</span>
-                    <span className="text-slate-900 font-bold">₹{creditSalesSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    {creditSalesSum > 0 && (
+                      <div className="flex justify-between text-[10px] text-rose-600 font-semibold">
+                        <span>↳ Credit Charges Slips:</span>
+                        <span>-₹{creditSalesSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    {fuelCollections.filter(col => col.payment_method !== 'Miscellaneous').every(c => (parseFloat(c.amount) || 0) === 0) && creditSalesSum === 0 && (
+                      <div className="text-[10px] text-slate-400 italic">No non-cash deductions today</div>
+                    )}
                   </div>
 
-                  <div className="flex justify-between text-xs font-bold pt-1">
-                    <span className="text-slate-900">Total Accounted:</span>
-                    <span className="text-slate-950 font-extrabold">₹{reportedRevLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs">
-                    <span className="text-slate-600">Reconciliation Shortage/Overage:</span>
-                    <span className={`${shortageOverageLive >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      ₹{shortageOverageLive >= 0 ? '+' : ''}{shortageOverageLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
+                  <div className="flex justify-between text-xs font-bold pt-2.5 border-t border-slate-200/80">
+                    <span className="text-slate-900">Fuel Cash Collected Today:</span>
+                    <span className="text-emerald-600 font-extrabold">₹{fuelCashVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
 
                 {/* Cashbook block */}
-                <h4 className="font-bold text-slate-900 text-[10px] tracking-wider uppercase border-b border-slate-200 pt-2 pb-2 font-display">Estimated Cash Book Inflow</h4>
+                <h4 className="font-bold text-slate-900 text-[10px] tracking-wider uppercase border-b border-slate-200 pt-2 pb-2 font-display">Cash Book Inflow</h4>
                 <div className="space-y-2.5 font-semibold text-slate-700">
                   <div className="flex justify-between text-[11px]">
                     <span>Opening Cash Book Balance:</span>
@@ -1399,27 +1703,55 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <span>+ Credit Payments (Cash Collected):</span>
                     <span className="text-slate-900 font-semibold">₹{creditPaymentsCashSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                  <div className={`flex justify-between text-[11px] ${totalDepositedLive === 0 ? 'border-b border-slate-200/80 pb-2.5' : ''}`}>
+                  <div className="flex justify-between text-[11px]">
                     <span>+ Other Items Cash Collected:</span>
                     <span className="text-slate-900 font-semibold">₹{(parseFloat(miscCash) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
 
-                  {totalDepositedLive > 0 && (
-                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold border-b border-slate-200/80 pb-2.5">
-                      <span>- Cash Deposited to Accounts:</span>
-                      <span>-₹{totalDepositedLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  {(parseFloat(priorPeriodAdjustment) || 0) !== 0 && (
+                    <div className="flex justify-between text-[11px]">
+                      <span>+/- Prior Day Adjustments:</span>
+                      <span className={`font-semibold ${(parseFloat(priorPeriodAdjustment) || 0) < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {(parseFloat(priorPeriodAdjustment) || 0) > 0 ? '+' : ''}₹{(parseFloat(priorPeriodAdjustment) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs">
-                    <span className="text-slate-705">Final Estimated Closing Cash Balance:</span>
+                  {miscExpenditureLive > 0 && (
+                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold">
+                      <span>- Miscellaneous Payouts:</span>
+                      <span>-₹{miscExpenditureLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+
+                  {pumpAccounts
+                    .filter(acc => acc.name !== "IOCL Account")
+                    .map((acc) => {
+                      const val = parseFloat(cashDeposits[acc.id] || '0') || 0;
+                      if (val <= 0) return null;
+                      return (
+                        <div key={acc.id} className="flex justify-between text-[11px] text-rose-600 font-semibold">
+                          <span>- Cash Deposited to {acc.name}:</span>
+                          <span>-₹{val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      );
+                    })}
+
+                  <div className="border-b border-slate-200/80 my-1 pb-0.5" />
+
+                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold shadow-2xs">
+                    <span className="text-slate-705">Closing Cash Balance:</span>
                     <span className="text-emerald-600 font-extrabold">₹{closingCashLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                </div>
 
-                {/* Non-cash collection totals */}
-                <div className="text-[10px] text-slate-500 pt-2 flex flex-wrap gap-4 font-semibold border-t border-slate-200/60">
-                  <span>Total Digital Fuel Sales: ₹{(parseFloat(fuelDigital) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  {priceChangeGainLossLive !== 0 && (
+                    <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs">
+                      <span className="text-slate-705">Price Change Inventory {priceChangeGainLossLive > 0 ? 'Gain' : 'Loss'}:</span>
+                      <span className={`font-extrabold ${priceChangeGainLossLive > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {priceChangeGainLossLive > 0 ? '+' : '-'}₹{Math.abs(priceChangeGainLossLive).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Paytm credited into account */}

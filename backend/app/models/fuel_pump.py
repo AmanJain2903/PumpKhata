@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean
+from sqlalchemy import Column, Integer, String, Text, Boolean, Numeric
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -9,6 +9,7 @@ class FuelPump(Base):
     name = Column(String(255), nullable=False)
     location = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    opening_cash_balance = Column(Numeric(12, 2), default=0.0, nullable=False)
 
     # Relationships
     products = relationship("Product", secondary="product_pumps", back_populates="pumps")

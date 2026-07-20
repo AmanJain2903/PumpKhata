@@ -24,6 +24,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [activeView, setActiveView] = useState<'manage' | 'ops_log'>('manage');
   const [todayLogStatus, setTodayLogStatus] = useState<'NOT_LOGGED' | 'OPEN' | 'CLOSED'>('NOT_LOGGED');
   const [workspaceKey, setWorkspaceKey] = useState(0);
+  const [hasLogs, setHasLogs] = useState(false);
 
   const getISTDateString = () => {
     const now = new Date();
@@ -241,6 +242,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     try {
       const config = await apiService.getPumpConfig(pumpId);
       setPump(config.pump);
+      setHasLogs(config.has_logs || false);
       setPumpAccounts(config.pump_accounts || []);
 
       // Sort tanks alphabetically
@@ -1273,41 +1275,45 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                   </div>
 
                                   {/* Tank configuration buttons */}
-                                  <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
-                                    <button
-                                      onClick={() => handleOpenEditTankModal(tank)}
-                                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
-                                      title="Edit Tank Details"
-                                    >
-                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                      </svg>
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteTank(tank)}
-                                      className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                      title="Delete Tank"
-                                    >
-                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                      </svg>
-                                    </button>
-                                  </div>
+                                  {!hasLogs && (
+                                    <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
+                                      <button
+                                        onClick={() => handleOpenEditTankModal(tank)}
+                                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
+                                        title="Edit Tank Details"
+                                      >
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                        </svg>
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteTank(tank)}
+                                        className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                        title="Delete Tank"
+                                      >
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             );
                           })}
                         </div>
 
-                        <button
-                          onClick={handleOpenAddTankModal}
-                          className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                          </svg>
-                          Add Storage Tank
-                        </button>
+                        {!hasLogs && (
+                          <button
+                            onClick={handleOpenAddTankModal}
+                            className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                            Add Storage Tank
+                          </button>
+                        )}
                       </div>
 
                       {/* Dispenser Units Section (Bottom Stack) */}
@@ -1332,6 +1338,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                     value={mach.name}
                                     onChange={(e) => handleRenameMachine(mach, e.target.value)}
                                     className="text-sm font-extrabold text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-grow bg-slate-50 focus:bg-white focus:outline-emerald-500 w-full"
+                                    disabled={hasLogs}
                                   />
 
                                   <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
@@ -1345,15 +1352,17 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                       <span>Active</span>
                                     </label>
 
-                                    <button
-                                      onClick={() => handleDeleteMachine(mach)}
-                                      className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                      title="Delete Dispenser"
-                                    >
-                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                      </svg>
-                                    </button>
+                                    {!hasLogs && (
+                                      <button
+                                        onClick={() => handleDeleteMachine(mach)}
+                                        className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                        title="Delete Dispenser"
+                                      >
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -1381,7 +1390,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                               onChange={(e) => handleRenameNozzle(nozzleKey, e.target.value)}
                                               className="text-xs font-bold text-slate-700 border border-slate-200 rounded px-2 py-1 w-full bg-white focus:outline-emerald-500"
                                               placeholder="Nozzle Label"
-                                              disabled={nozzle.is_active === false}
+                                              disabled={nozzle.is_active === false || hasLogs}
                                             />
 
                                             <input
@@ -1392,15 +1401,17 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                               title="Toggle Nozzle Active Status"
                                             />
 
-                                            <button
-                                              onClick={() => handleDeleteNozzle(nozzleKey)}
-                                              className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
-                                              title="Delete Nozzle"
-                                            >
-                                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                              </svg>
-                                            </button>
+                                            {!hasLogs && (
+                                              <button
+                                                onClick={() => handleDeleteNozzle(nozzleKey)}
+                                                className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
+                                                title="Delete Nozzle"
+                                              >
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                              </button>
+                                            )}
                                           </div>
 
                                           {nozzle.is_active !== false ? (
@@ -1419,6 +1430,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                                     }))
                                                   ]}
                                                   className="!rounded-lg !py-1.5"
+                                                  disabled={hasLogs}
                                                 />
                                               </div>
 
@@ -1431,6 +1443,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                                   className="w-full text-xs border border-slate-200 rounded p-1.5 focus:outline-emerald-500"
                                                   min="0"
                                                   placeholder="Last shift closing reading"
+                                                  disabled={hasLogs}
                                                 />
                                               </div>
                                             </>
@@ -1445,31 +1458,35 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                   })}
                                 </div>
 
-                                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
-                                  <button
-                                    onClick={() => handleAddNewNozzle(mach)}
-                                    className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                                    </svg>
-                                    Add Nozzle
-                                  </button>
-                                </div>
+                                {!hasLogs && (
+                                  <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
+                                    <button
+                                      onClick={() => handleAddNewNozzle(mach)}
+                                      className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                                      </svg>
+                                      Add Nozzle
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
                         </div>
 
-                        <button
-                          onClick={handleAddMachine}
-                          className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                          </svg>
-                          Add Dispenser Unit
-                        </button>
+                        {!hasLogs && (
+                          <button
+                            onClick={handleAddMachine}
+                            className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                            Add Dispenser Unit
+                          </button>
+                        )}
                       </div>
 
                     </div>

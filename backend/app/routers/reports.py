@@ -19,8 +19,9 @@ from app.models.fuel_pump import FuelPump
 from app.models.product import Product
 from app.models.tank import Tank
 from app.models.machine import Machine, Nozzle
-from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog
+from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog, DailyLogSession
 from app.models.credit import CreditAccount
+from app.models.price_change import PriceChangeGainLoss
 from app.routers.operations import get_historical_price_and_margin
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -88,15 +89,24 @@ def generate_monthly_report_data(db: Session, start_date: date, end_date: date, 
             DailyNozzleLog.log_date <= end_date
         ).all()
 
+        from decimal import Decimal, ROUND_HALF_UP
+        from collections import defaultdict
+
+        # Map nozzle_id to tank_id
+        nozzle_tank_map = {n.id: n.tank_id for n in nozzles}
+        daily_tank_revenues = defaultdict(float)
+
         total_gross_liters = 0.0
-        nozzle_revenue = 0.0
         nozzle_profit = 0.0
 
         for log in nozzle_logs:
+            t_id = nozzle_tank_map.get(log.nozzle_id)
+            if not t_id:
+                continue
             gross = float(log.gross_liters_sold)
             total_gross_liters += gross
             price, margin = get_historical_price_and_margin(db, product.id, log.log_timestamp)
-            nozzle_revenue += gross * float(price)
+            daily_tank_revenues[(log.log_date, t_id)] += gross * float(price)
             nozzle_profit += gross * float(margin)
 
         # Tanks storing this product
@@ -112,17 +122,20 @@ def generate_monthly_report_data(db: Session, start_date: date, end_date: date, 
         total_testing_liters = sum(float(log.testing_liters) for log in tank_logs)
         
         # Testing deductions (testing liters generate 0 revenue and 0 profit margin)
-        testing_revenue_deduction = 0.0
         testing_profit_deduction = 0.0
         for log in tank_logs:
             testing = float(log.testing_liters)
             if testing > 0:
                 price, margin = get_historical_price_and_margin(db, product.id, log.log_timestamp)
-                testing_revenue_deduction += testing * float(price)
+                daily_tank_revenues[(log.log_date, log.tank_id)] -= testing * float(price)
                 testing_profit_deduction += testing * float(margin)
 
+        net_revenue = Decimal("0.0")
+        for val in daily_tank_revenues.values():
+            net_revenue += Decimal(str(val)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            
+        net_revenue_float = float(net_revenue)
         net_liters = total_gross_liters - total_testing_liters
-        net_revenue = nozzle_revenue - testing_revenue_deduction
         net_profit = nozzle_profit - testing_profit_deduction
 
         product_metrics.append({
@@ -131,11 +144,11 @@ def generate_monthly_report_data(db: Session, start_date: date, end_date: date, 
             "gross_liters_sold": total_gross_liters,
             "testing_liters": total_testing_liters,
             "net_liters_sold": net_liters,
-            "expected_revenue": net_revenue,
+            "expected_revenue": net_revenue_float,
             "net_profit_margin": net_profit
         })
 
-        total_expected_revenue += net_revenue
+        total_expected_revenue += net_revenue_float
         total_net_profit_margin += net_profit
 
     # Aggregates by Tank (variance and testing)
@@ -179,6 +192,38 @@ def generate_monthly_report_data(db: Session, start_date: date, end_date: date, 
     total_credit_sales = sum(float(log.credit_sales_logged) for log in financial_logs)
     total_shortage_overage = sum(float(log.shortage_overage) for log in financial_logs)
 
+    # Prior Period Adjustments Total
+    adj_query = db.query(func.sum(DailyLogSession.prior_period_adjustment)).filter(
+        DailyLogSession.log_date >= start_date,
+        DailyLogSession.log_date <= end_date,
+        DailyLogSession.status == DailyLogSessionStatus.CLOSED
+    )
+    if pump_id is not None:
+        adj_query = adj_query.filter(DailyLogSession.pump_id == pump_id)
+    total_prior_period_adjustment = float(adj_query.scalar() or 0.0)
+
+    # Price Change Inventory Adjustments
+    pc_query = db.query(PriceChangeGainLoss).join(PriceChangeGainLoss.session).filter(
+        DailyLogSession.log_date >= start_date,
+        DailyLogSession.log_date <= end_date
+    )
+    if pump_id is not None:
+        pc_query = pc_query.filter(DailyLogSession.pump_id == pump_id)
+    pc_records = pc_query.all()
+
+    total_price_change_adjustment = 0.0
+    price_change_by_product = {}
+    for pc in pc_records:
+        amt = float(pc.gain_loss_amount)
+        total_price_change_adjustment += amt
+        p_name = pc.product.name
+        price_change_by_product[p_name] = price_change_by_product.get(p_name, 0.0) + amt
+
+    price_change_adjustments = {
+        "total": total_price_change_adjustment,
+        "by_product": [{"product_name": p, "amount": a} for p, a in price_change_by_product.items()]
+    }
+
     return {
         "report_period": f"{start_date.isoformat()} to {end_date.isoformat()}",
         "generated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
@@ -192,8 +237,11 @@ def generate_monthly_report_data(db: Session, start_date: date, end_date: date, 
             "total_digital_collected": total_digital_collected,
             "total_credit_sales_logged": total_credit_sales,
             "total_shortage_overage": total_shortage_overage,
-            "outstanding_credit_balance": total_outstanding_credit
+            "outstanding_credit_balance": total_outstanding_credit,
+            "price_change_adjustment": total_price_change_adjustment,
+            "prior_period_adjustment": total_prior_period_adjustment
         },
+        "price_change_adjustments": price_change_adjustments,
         "products": product_metrics,
         "tanks": tank_metrics
     }
@@ -259,6 +307,7 @@ def generate_monthly_report_pdf(data: dict) -> io.BytesIO:
         [Paragraph("Digital Payments Collected", normal_style), Paragraph(f"{summary['total_digital_collected']:.2f}", normal_style)],
         [Paragraph("Credit Sales Logged", normal_style), Paragraph(f"{summary['total_credit_sales_logged']:.2f}", normal_style)],
         [Paragraph("Shortage / Overage", normal_style), Paragraph(f"{summary['total_shortage_overage']:.2f}", normal_style)],
+        [Paragraph("Prior Period Adjustments", normal_style), Paragraph(f"{summary.get('prior_period_adjustment', 0.0):.2f}", normal_style)],
         [Paragraph("Outstanding Credit Balance", normal_style), Paragraph(f"{summary['outstanding_credit_balance']:.2f}", normal_style)]
     ]
     t_summary = Table(summary_data, colWidths=[260, 260])
@@ -271,6 +320,33 @@ def generate_monthly_report_pdf(data: dict) -> io.BytesIO:
     ]))
     story.append(t_summary)
     story.append(Spacer(1, 10))
+
+    # Price Change Adjustments Table
+    if data['summary'].get('price_change_adjustment', 0) != 0:
+        story.append(Paragraph("Price Change Inventory Adjustments", section_heading))
+        pc_data = [
+            [Paragraph("<b>Product</b>", normal_style), Paragraph("<b>Gain/Loss (INR)</b>", normal_style)]
+        ]
+        for pc in data['price_change_adjustments']['by_product']:
+            pc_data.append([
+                Paragraph(pc['product_name'], normal_style),
+                Paragraph(f"{pc['amount']:.2f}", normal_style)
+            ])
+        pc_data.append([
+            Paragraph("<b>Total Adjustment</b>", normal_style),
+            Paragraph(f"<b>{data['summary']['price_change_adjustment']:.2f}</b>", normal_style)
+        ])
+        t_pc = Table(pc_data, colWidths=[260, 260])
+        t_pc.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#E2E8F0')),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E0')),
+            ('ROWBACKGROUNDS', (0,1), (-2,-1), [colors.white, colors.HexColor('#F7FAFC')]),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#EDF2F7'))
+        ]))
+        story.append(t_pc)
+        story.append(Spacer(1, 10))
     
     # Product Sales Table
     story.append(Paragraph("Product Sales Breakdown", section_heading))
@@ -346,9 +422,18 @@ def generate_csv_string_helper(data: dict) -> str:
     writer.writerow(["Digital Collected", f"INR {data['summary']['total_digital_collected']:.2f}"])
     writer.writerow(["Credit Sales Logged", f"INR {data['summary']['total_credit_sales_logged']:.2f}"])
     writer.writerow(["Reconciliation Shortage/Overage", f"INR {data['summary']['total_shortage_overage']:.2f}"])
+    writer.writerow(["Prior Period Adjustments", f"INR {data['summary'].get('prior_period_adjustment', 0.0):.2f}"])
     writer.writerow(["Total Outstanding B2B Credit Balance", f"INR {data['summary']['outstanding_credit_balance']:.2f}"])
     writer.writerow([])
-    
+
+    if data['summary'].get('price_change_adjustment', 0) != 0:
+        writer.writerow(["PRICE CHANGE INVENTORY ADJUSTMENTS"])
+        writer.writerow(["Product Name", "Gain/Loss (INR)"])
+        for pc in data['price_change_adjustments']['by_product']:
+            writer.writerow([pc['product_name'], f"{pc['amount']:.2f}"])
+        writer.writerow(["Total Adjustment", f"INR {data['summary']['price_change_adjustment']:.2f}"])
+        writer.writerow([])
+
     # Product Sales breakdown
     writer.writerow(["PRODUCT SALES BREAKDOWN"])
     writer.writerow(["Product ID", "Product Name", "Gross Liters Sold", "Testing Liters", "Net Liters Sold", "Expected Revenue", "Profit Margin"])

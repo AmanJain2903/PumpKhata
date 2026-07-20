@@ -146,6 +146,11 @@ def record_transaction(
                 detail=f"Cannot add transaction because the session for {log_date} is already closed. Please reopen it first."
             )
     else:
+        # Get pump details
+        pump = db.query(FuelPump).filter(FuelPump.id == account.pump_id, FuelPump.is_active == True).first()
+        if not pump:
+            raise HTTPException(status_code=404, detail="Active fuel pump not found for this account")
+
         # Get opening cash balance from last created session
         last_session = db.query(DailyLogSession).filter(
             DailyLogSession.pump_id == account.pump_id,
@@ -153,26 +158,23 @@ def record_transaction(
         ).order_by(DailyLogSession.log_date.desc()).first()
 
         if last_session:
-            opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else Decimal("0.0")
+            opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else last_session.opening_cash_balance
         else:
             prev_fin_log = db.query(DailyFinancialLog).filter(
                 DailyFinancialLog.pump_id == account.pump_id,
                 DailyFinancialLog.log_date < log_date
             ).order_by(DailyFinancialLog.log_date.desc()).first()
-            opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
-
-        # Get pump details
-        pump = db.query(FuelPump).filter(FuelPump.id == account.pump_id, FuelPump.is_active == True).first()
-        if not pump:
-            raise HTTPException(status_code=404, detail="Active fuel pump not found for this account")
+            opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else pump.opening_cash_balance
 
         # Create session
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == account.pump_id).first() is None
         session = DailyLogSession(
             pump_id=account.pump_id,
             log_date=log_date,
             status=DailyLogSessionStatus.OPEN,
             opened_at=datetime.now(IST),
             opening_cash_balance=opening_cash,
+            is_initialization=is_first,
             misc_cash=Decimal("0.0"),
             misc_digital=Decimal("0.0")
         )

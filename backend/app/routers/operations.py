@@ -71,6 +71,8 @@ class CashDepositInput(BaseModel):
 class CloseSessionRequest(BaseModel):
     fuel_collections: List[SessionCollectionInput]
     cash_deposits: Optional[List[CashDepositInput]] = None
+    prior_period_adjustment: Decimal = Decimal("0.0")
+    adjustment_notes: Optional[str] = None
 
 # Legacy Request Schemas
 class NozzleLogEntry(BaseModel):
@@ -107,6 +109,8 @@ class PrefillNozzleResponse(BaseModel):
     product_id: int
     product_name: str
     product_price: Decimal
+    has_price_change: bool = False
+    old_price: Optional[Decimal] = None
 
 class PrefillTankResponse(BaseModel):
     tank_id: int
@@ -154,15 +158,35 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
     ).order_by(DailyLogSession.log_date.desc()).first()
     
     if prev_session:
-        opening_cash_balance = prev_session.closing_cash_balance if prev_session.closing_cash_balance is not None else Decimal("0.0")
+        opening_cash_balance = prev_session.closing_cash_balance if prev_session.closing_cash_balance is not None else prev_session.opening_cash_balance
     else:
         prev_fin_log = db.query(DailyFinancialLog).filter(
             DailyFinancialLog.pump_id == pump_id,
             DailyFinancialLog.log_date < log_date
         ).order_by(DailyFinancialLog.log_date.desc()).first()
-        opening_cash_balance = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
+        opening_cash_balance = prev_fin_log.closing_cash_balance if prev_fin_log else pump.opening_cash_balance
 
     # 2. Fetch nozzles and their opening meter readings
+    # Pre-compute price change info per product for today
+    # A price change today means a ProductPriceHistory record was closed (valid_to set) today
+    price_change_cache = {}  # product_id -> old_price or None
+    today_start = datetime.combine(log_date, time.min).replace(tzinfo=IST)
+    today_end = datetime.combine(log_date, time.max).replace(tzinfo=IST)
+
+    for product in pump.products:
+        # Find history records that were closed today (valid_to is today)
+        closed_today = db.query(ProductPriceHistory).filter(
+            ProductPriceHistory.product_id == product.id,
+            ProductPriceHistory.valid_to >= today_start,
+            ProductPriceHistory.valid_to <= today_end
+        ).order_by(ProductPriceHistory.valid_from.asc()).all()
+
+        if closed_today:
+            # Use the earliest record's selling_price as the "old price"
+            price_change_cache[product.id] = closed_today[0].selling_price
+        else:
+            price_change_cache[product.id] = None
+
     prefill_nozzles = []
     for machine in pump.machines:
         if not machine.is_active:
@@ -182,6 +206,10 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
             # Active product price
             price, _ = get_historical_price_and_margin(db, nozzle.tank.product_id, log_timestamp)
 
+            # Check if this product had a price change today
+            old_price = price_change_cache.get(nozzle.tank.product_id)
+            has_price_change = old_price is not None and old_price != price
+
             prefill_nozzles.append(PrefillNozzleResponse(
                 nozzle_id=nozzle.id,
                 nozzle_name=nozzle.name,
@@ -189,7 +217,9 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
                 opening_reading=opening_reading,
                 product_id=nozzle.tank.product_id,
                 product_name=nozzle.tank.product.name,
-                product_price=price
+                product_price=price,
+                has_price_change=has_price_change,
+                old_price=old_price if has_price_change else None
             ))
 
     # 3. Fetch tanks and their opening dip volumes
@@ -251,15 +281,18 @@ def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Sess
         DailyLogSession.log_date < log_date
     ).order_by(DailyLogSession.log_date.desc()).first()
 
+    pump = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
     if last_session:
-        opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else Decimal("0.0")
+        opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else last_session.opening_cash_balance
     else:
         # Fallback to legacy logs
         prev_fin_log = db.query(DailyFinancialLog).filter(
             DailyFinancialLog.pump_id == pump_id,
             DailyFinancialLog.log_date < log_date
         ).order_by(DailyFinancialLog.log_date.desc()).first()
-        opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else Decimal("0.0")
+        opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump.opening_cash_balance if pump else Decimal("0.0"))
+
+    is_first_session = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
 
     # Create new session
     session = DailyLogSession(
@@ -268,6 +301,7 @@ def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Sess
         status=DailyLogSessionStatus.OPEN,
         opened_at=datetime.now(IST),
         opening_cash_balance=opening_cash,
+        is_initialization=is_first_session,
         misc_cash=Decimal("0.0"),
         misc_digital=Decimal("0.0")
     )
@@ -598,22 +632,22 @@ def delete_session_credit_payment(session_id: int, tx_id: int, db: Session = Dep
 
 @router.put("/session/{session_id}/misc")
 def save_session_misc(session_id: int, req: MiscSave, db: Session = Depends(get_db)):
-    """Saves miscellaneous income totals for the daily session."""
+    """Saves miscellaneous expenditure totals for the daily session."""
     session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     if session.status == DailyLogSessionStatus.CLOSED:
-        raise HTTPException(status_code=400, detail="Cannot edit a closed session")
+        raise HTTPException(status_code=400, detail="Cannot edit a closed session.")
 
     if req.misc_cash < 0:
-        raise HTTPException(status_code=400, detail="Miscellaneous cash income cannot be negative.")
+        raise HTTPException(status_code=400, detail="Miscellaneous cash expenditure cannot be negative.")
 
     session.misc_cash = req.misc_cash
     session.misc_digital = Decimal("0.0")
     session.misc_notes = req.misc_notes
     db.commit()
-    return {"status": "success", "message": "Miscellaneous income totals saved"}
+    return {"status": "success", "message": "Miscellaneous expenditure saved"}
 
 @router.post("/session/{session_id}/close")
 def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depends(get_db)):
@@ -634,20 +668,40 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
     if not tank_logs:
         raise HTTPException(status_code=400, detail="Cannot close day: Tank dip volumes must be saved first.")
 
-    # 2. Expected revenue calculation
-    # Expected Revenue = sum(nozzle gross * price) - sum(tank testing liters * price at timestamp)
-    expected_revenue = Decimal("0.0")
-    for nl in nozzle_logs:
-        expected_revenue += nl.gross_liters_sold * nl.product_price
+    # 2. Expected revenue calculation (Rounded per tank)
+    from decimal import ROUND_HALF_UP
 
-    # Deduct testing liters
-    testing_deductions = Decimal("0.0")
+    # Map nozzles to tanks
+    nozzle_tank_map = {}
+    for nl in nozzle_logs:
+        nozzle = db.query(Nozzle).filter(Nozzle.id == nl.nozzle_id).first()
+        if nozzle:
+            nozzle_tank_map[nl.nozzle_id] = nozzle.tank_id
+
+    tanks_set = set(nozzle_tank_map.values())
     for tl in tank_logs:
-        if tl.testing_liters > 0:
-            price, _ = get_historical_price_and_margin(db, tl.tank.product_id, tl.log_timestamp)
-            testing_deductions += tl.testing_liters * price
+        tanks_set.add(tl.tank_id)
+
+    expected_revenue = Decimal("0.0")
+
+    for tank_id in tanks_set:
+        if not tank_id:
+            continue
             
-    expected_revenue -= testing_deductions
+        tank_rev = Decimal("0.0")
+        
+        # Add nozzle sales for this tank
+        for nl in nozzle_logs:
+            if nozzle_tank_map.get(nl.nozzle_id) == tank_id:
+                tank_rev += nl.gross_liters_sold * nl.product_price
+                
+        # Deduct testing liters for this tank
+        for tl in tank_logs:
+            if tl.tank_id == tank_id and tl.testing_liters > 0:
+                price, _ = get_historical_price_and_margin(db, tl.tank.product_id, tl.log_timestamp)
+                tank_rev -= tl.testing_liters * price
+                
+        expected_revenue += tank_rev.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
 
     # 3. Sum credit sales charges logged today
     credit_sales_total = db.query(func.sum(CreditTransaction.amount)).filter(
@@ -659,8 +713,8 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
     from app.models.log import DailyLogSessionPayment
     db.query(DailyLogSessionPayment).filter(DailyLogSessionPayment.session_id == session_id).delete()
     
-    fuel_cash_collected = Decimal("0.0")
     fuel_digital_collected = Decimal("0.0")
+    misc_expenditure = Decimal("0.0")
     
     for col in req.fuel_collections:
         if col.amount < 0:
@@ -672,26 +726,34 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
             log_date=session.log_date
         )
         db.add(col_db)
-        if col.payment_method == "Cash":
-            fuel_cash_collected += col.amount
+        if col.payment_method == "Miscellaneous":
+            misc_expenditure += col.amount
         else:
             fuel_digital_collected += col.amount
 
-    # 5. Shortage/Overage = actual fuel collected (cash + digital) + credit charges - expected revenue
-    actual_reported_fuel = fuel_cash_collected + fuel_digital_collected + credit_sales_total
-    shortage_overage = actual_reported_fuel - expected_revenue
+    # Daily fuel cash is automatically calculated as the remainder of expected revenue
+    fuel_cash_collected = expected_revenue - credit_sales_total - fuel_digital_collected
 
-    # 6. Sum credit payments received today (grouped by payment method, all Cash now)
+    # 5. Shortage/Overage = actual fuel collected (cash + digital) + credit charges - expected revenue
+    # Under auto-calculated cash model, this balances perfectly to 0.0
+    shortage_overage = Decimal("0.00")
+
+    # 6. Sum credit payments received today (CASH only vs ACCOUNT_TRANSFER)
     credit_payments_cash = db.query(func.sum(CreditTransaction.amount)).filter(
         CreditTransaction.session_id == session_id,
-        CreditTransaction.type == CreditTransactionType.PAYMENT
+        CreditTransaction.type == CreditTransactionType.PAYMENT,
+        CreditTransaction.payment_method == "CASH"
     ).scalar() or Decimal("0.0")
 
-    credit_payments_digital = Decimal("0.0")
+    credit_payments_digital = db.query(func.sum(CreditTransaction.amount)).filter(
+        CreditTransaction.session_id == session_id,
+        CreditTransaction.type == CreditTransactionType.PAYMENT,
+        CreditTransaction.payment_method == "ACCOUNT_TRANSFER"
+    ).scalar() or Decimal("0.0")
 
     # 7. Compute closing cash balance
-    # Closing Cash = Opening Cash + Fuel Cash + Credit Cash Payments + Misc Cash - Total Cash Deposits
-    cash_balance_before = session.opening_cash_balance + fuel_cash_collected + credit_payments_cash + session.misc_cash
+    # Closing Cash = Opening Cash + Fuel Cash + Credit Cash Payments + Misc Cash (Other Items Income) - Miscellaneous Expenditure - Total Cash Deposits +/- Prior Period Adjustment
+    cash_balance_before = session.opening_cash_balance + fuel_cash_collected + credit_payments_cash + session.misc_cash - misc_expenditure + req.prior_period_adjustment
     
     total_deposited = Decimal("0.0")
     if req.cash_deposits:
@@ -701,11 +763,11 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
             if deposit.amount > 0:
                 total_deposited += deposit.amount
                 
-    if total_deposited > cash_balance_before:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Total cash deposited (₹{total_deposited}) cannot exceed the total cash balance available before deposits (₹{cash_balance_before})."
-        )
+        if total_deposited > cash_balance_before:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Total cash deposited (₹{total_deposited}) cannot exceed the total cash balance available before deposits (₹{cash_balance_before})."
+            )
         
     closing_cash = cash_balance_before - total_deposited
 
@@ -721,6 +783,8 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
     session.credit_payments_cash_total = credit_payments_cash
     session.credit_payments_digital_total = credit_payments_digital
     session.closing_cash_balance = closing_cash
+    session.prior_period_adjustment = req.prior_period_adjustment
+    session.adjustment_notes = req.adjustment_notes
 
     # Propagate tank updates to the Tank model itself (baseline dip & variance)
     for tl in tank_logs:
@@ -824,6 +888,74 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
                     )
                     db.add(deposit_ledger)
 
+    # --- Price Change Gain/Loss Calculation ---
+    from app.models.price_change import PriceChangeGainLoss
+    # Clear any existing price change records for this session (idempotent)
+    db.query(PriceChangeGainLoss).filter(PriceChangeGainLoss.session_id == session_id).delete()
+
+    price_change_total = Decimal("0.0")
+    today_start = datetime.combine(session.log_date, time.min).replace(tzinfo=IST)
+    today_end = datetime.combine(session.log_date, time.max).replace(tzinfo=IST)
+
+    pump = session.pump
+    for product in pump.products:
+        # Check if this product had a price change today
+        closed_today = db.query(ProductPriceHistory).filter(
+            ProductPriceHistory.product_id == product.id,
+            ProductPriceHistory.valid_to >= today_start,
+            ProductPriceHistory.valid_to <= today_end
+        ).order_by(ProductPriceHistory.valid_from.asc()).all()
+
+        if not closed_today:
+            continue
+
+        old_price = closed_today[0].selling_price  # earliest old price
+        new_price = product.current_price  # latest (current) price
+
+        if old_price == new_price:
+            continue
+
+        # Find all tanks for this product at this pump
+        product_tanks = [t for t in pump.tanks if t.product_id == product.id]
+        for tank in product_tanks:
+            # Get opening dip volume for this tank (from prefill / previous day)
+            prev_tank_log = db.query(DailyTankLog).filter(
+                DailyTankLog.tank_id == tank.id,
+                DailyTankLog.log_date < session.log_date
+            ).order_by(DailyTankLog.log_date.desc()).first()
+            opening_dip = prev_tank_log.actual_dip_volume if prev_tank_log else tank.actual_dip_volume
+
+            # Sum fuel sold at old price from all nozzles connected to this tank (entry_index = 0)
+            tank_nozzle_ids = [n.id for n in tank.nozzles if n.is_active]
+            fuel_sold_old = Decimal("0.0")
+            if tank_nozzle_ids:
+                result = db.query(func.sum(DailyNozzleLog.gross_liters_sold)).filter(
+                    DailyNozzleLog.session_id == session_id,
+                    DailyNozzleLog.nozzle_id.in_(tank_nozzle_ids),
+                    DailyNozzleLog.entry_index == 0
+                ).scalar()
+                fuel_sold_old = result or Decimal("0.0")
+
+            stock_at_change = opening_dip - fuel_sold_old
+            gain_loss = (new_price - old_price) * stock_at_change
+
+            pc_record = PriceChangeGainLoss(
+                session_id=session_id,
+                product_id=product.id,
+                tank_id=tank.id,
+                old_price=old_price,
+                new_price=new_price,
+                opening_dip_volume=opening_dip,
+                fuel_sold_at_old_price=fuel_sold_old,
+                stock_at_change=stock_at_change,
+                gain_loss_amount=gain_loss,
+                log_date=session.log_date
+            )
+            db.add(pc_record)
+            price_change_total += gain_loss
+
+    session.price_change_gain_loss_total = price_change_total if price_change_total != Decimal("0.0") else None
+
     db.commit()
     
     return {
@@ -834,7 +966,8 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
             "shortage_overage": shortage_overage,
             "opening_cash_balance": session.opening_cash_balance,
             "closing_cash_balance": closing_cash,
-            "paytm_credited_today": paytm_credited_today
+            "paytm_credited_today": paytm_credited_today,
+            "price_change_gain_loss": price_change_total if price_change_total != Decimal("0.0") else None
         }
     }
 
@@ -885,14 +1018,16 @@ def submit_shift_log_legacy(pump_id: int, req: ShiftSubmitRequest, db: Session =
             DailyLogSession.pump_id == pump_id,
             DailyLogSession.log_date < req.log_date
         ).order_by(DailyLogSession.log_date.desc()).first()
-        opening_cash = last_session.closing_cash_balance if last_session and last_session.closing_cash_balance is not None else Decimal("0.0")
+        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else pump.opening_cash_balance)
         
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
         session = DailyLogSession(
             pump_id=pump_id,
             log_date=req.log_date,
             status=DailyLogSessionStatus.OPEN,
             opened_at=req.log_timestamp,
             opening_cash_balance=opening_cash,
+            is_initialization=is_first,
             misc_cash=Decimal("0.0"),
             misc_digital=Decimal("0.0")
         )

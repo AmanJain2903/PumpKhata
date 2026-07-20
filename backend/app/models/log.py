@@ -31,6 +31,10 @@ class DailyLogSession(Base):
     misc_digital = Column(Numeric(12, 2), default=0.0, nullable=False)
     misc_notes = Column(Text, nullable=True)
     closing_cash_balance = Column(Numeric(12, 2), nullable=True)
+    price_change_gain_loss_total = Column(Numeric(12, 2), nullable=True)
+    prior_period_adjustment = Column(Numeric(12, 2), default=0.0, nullable=False)
+    adjustment_notes = Column(Text, nullable=True)
+    is_initialization = Column(Boolean, default=False, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("pump_id", "log_date", name="uq_pump_date_session"),
@@ -43,6 +47,7 @@ class DailyLogSession(Base):
     credit_transactions = relationship("CreditTransaction", back_populates="session")
     collections = relationship("DailyLogSessionPayment", back_populates="session", cascade="all, delete-orphan")
     account_transactions = relationship("PumpAccountTransaction", back_populates="session", cascade="all, delete-orphan")
+    price_change_records = relationship("PriceChangeGainLoss", back_populates="session", cascade="all, delete-orphan")
 
 
 class DailyNozzleLog(Base):
