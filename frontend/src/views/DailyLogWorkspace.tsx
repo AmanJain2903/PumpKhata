@@ -73,7 +73,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       }
       const timer = setTimeout(() => {
         const isPastDate = session?.log_date && session?.log_date < getISTDateString() && session?.status === 'OPEN';
-        
+
         // If we are opening section 1 and there is a past date warning, scroll to the warning instead so it's not cut off
         if (openSection === 1 && isPastDate) {
           const warningEl = document.getElementById('past-date-warning');
@@ -82,7 +82,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
             return;
           }
         }
-        
+
         const element = document.getElementById(`log-section-${openSection}`);
         if (element) {
           element.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -298,6 +298,40 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const getProductTextColor = (productName: string) => {
+    const name = (productName || '').toUpperCase();
+    if (name.includes('DIESEL') || name.includes('HSD')) {
+      return 'text-indigo-500';
+    }
+    if (name.includes('XP95') || name.includes('PREMIUM') || name.includes('SPEED')) {
+      return 'text-rose-500';
+    }
+    if (name.includes('MS') || name.includes('PETROL')) {
+      return 'text-amber-500';
+    }
+    if (name.includes('XG') || name.includes('GREEN')) {
+      return 'text-emerald-500';
+    }
+    return 'text-orange-500';
+  };
+
+  // Helper to parse and evaluate sum expressions like "10 20, 30"
+  const parseSumExpression = (val: string): string => {
+    if (!val) return '';
+    const parts = val.replace(/,/g, ' ').split(/\s+/);
+    let sum = 0;
+    let hasValidNumber = false;
+    for (const p of parts) {
+      if (p.trim() === '') continue;
+      const num = parseFloat(p);
+      if (!isNaN(num)) {
+        sum += num;
+        hasValidNumber = true;
+      }
+    }
+    return hasValidNumber ? String(sum) : val;
   };
 
   // Helper to calculate total nozzle dispensed liters per nozzle row
@@ -725,14 +759,16 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       }
     }
 
-    if (totalDeposited > maxCashAvailable) {
-      setCloseError(`Total cash deposited (₹${totalDeposited.toLocaleString('en-IN')}) cannot exceed the total cash balance available before deposits (₹${maxCashAvailable.toLocaleString('en-IN')}).`);
+    const adjAmount = priorPeriodAdjustment.trim() ? parseFloat(priorPeriodAdjustment) : 0;
+    const finalClosingCash = maxCashAvailable - totalDeposited + adjAmount;
+
+    if (finalClosingCash < 0) {
+      setCloseError(`Closing cash balance cannot be negative (₹${finalClosingCash.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). Please check your inputs.`);
       return;
     }
 
     setCloseSaving(true);
     try {
-      const adjAmount = priorPeriodAdjustment.trim() ? parseFloat(priorPeriodAdjustment) : 0;
       await apiService.closeSession(session.id, collectionsPayload, depositsPayload, adjAmount, adjustmentNotes.trim() || undefined);
       setSuccessMsg('Day logged and locked successfully! Redirecting...');
 
@@ -1134,10 +1170,23 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                 </div>
 
                 <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Variance</span>
-                  <span className={`text-xs font-extrabold ${log.calculated_variance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {log.calculated_variance >= 0 ? '+' : ''}{log.calculated_variance.toFixed(2)} L
-                  </span>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Net Sold</span>
+                    <span className={`text-xs font-extrabold ${getProductTextColor(log.product_name)}`}>
+                      {(
+                        nozzleLogs
+                          .filter(nl => nozzlesList.find(n => n.id === nl.nozzle_id)?.tank_id === log.tank_id)
+                          .reduce((sum, nl) => sum + getNozzleDispensed(nl), 0)
+                        - (parseFloat(log.testing_liters) || 0)
+                      ).toFixed(2)} L
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Variance</span>
+                    <span className={`text-xs font-extrabold ${log.calculated_variance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {log.calculated_variance >= 0 ? '+' : ''}{log.calculated_variance.toFixed(2)} L
+                    </span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -1508,12 +1557,18 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
             <div>
               <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-wider mb-1.5">Other Items Income - Cash (₹)</label>
               <input
-                type="number"
-                min="0"
-                step="any"
+                type="text"
+                placeholder="e.g. 10, 20, 30 (Press Enter to sum)"
                 disabled={isClosed}
                 value={miscCash}
                 onChange={(e) => setMiscCash(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    setMiscCash(parseSumExpression(miscCash));
+                  }
+                }}
+                onBlur={() => setMiscCash(parseSumExpression(miscCash))}
                 className="w-full max-w-md rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-350 focus:border-emerald-500 focus:outline-none text-xs font-bold"
               />
             </div>
@@ -1580,26 +1635,94 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         {openSection === 6 && (
           <div className="p-5 border-t border-slate-100 bg-white space-y-6 animate-fadeIn">
             <form onSubmit={handleCloseSession} className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                {fuelCollections.map((col, idx) => (
-                  <div key={col.payment_method}>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} (₹)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      placeholder="0.00"
-                      disabled={isClosed}
-                      value={col.amount}
-                      onChange={(e) => {
-                        const newCollections = [...fuelCollections];
-                        newCollections[idx].amount = e.target.value;
-                        setFuelCollections(newCollections);
-                      }}
-                      className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
-                    />
-                  </div>
-                ))}
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-display">Collections</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Record digital and card collections</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                  {fuelCollections.map((col, idx) => (
+                    col.payment_method !== 'Miscellaneous' ? (
+                      <div key={col.payment_method}>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} (₹)</label>
+                        <input
+                          type={col.payment_method === 'Miscellaneous' ? 'text' : 'number'}
+                          min={col.payment_method === 'Miscellaneous' ? undefined : "0"}
+                          step={col.payment_method === 'Miscellaneous' ? undefined : "any"}
+                          placeholder={col.payment_method === 'Miscellaneous' ? 'e.g. 10, 20 (Press Enter to sum)' : '0.00'}
+                          disabled={isClosed}
+                          value={col.amount}
+                          onChange={(e) => {
+                            const newCollections = [...fuelCollections];
+                            newCollections[idx].amount = e.target.value;
+                            setFuelCollections(newCollections);
+                          }}
+                          onKeyDown={(e) => {
+                            if (col.payment_method === 'Miscellaneous' && e.key === 'Enter') {
+                              e.preventDefault();
+                              const newCollections = [...fuelCollections];
+                              newCollections[idx].amount = parseSumExpression(newCollections[idx].amount);
+                              setFuelCollections(newCollections);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (col.payment_method === 'Miscellaneous') {
+                              const newCollections = [...fuelCollections];
+                              newCollections[idx].amount = parseSumExpression(newCollections[idx].amount);
+                              setFuelCollections(newCollections);
+                            }
+                          }}
+                          className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                        />
+                      </div>
+                    ) : null
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-display">Expenses</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Record miscellaneous station expenses</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                  {fuelCollections.map((col, idx) => (
+                    col.payment_method === 'Miscellaneous' ? (
+                      <div key={col.payment_method}>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{col.payment_method} (₹)</label>
+                        <input
+                          type={col.payment_method === 'Miscellaneous' ? 'text' : 'number'}
+                          min={col.payment_method === 'Miscellaneous' ? undefined : "0"}
+                          step={col.payment_method === 'Miscellaneous' ? undefined : "any"}
+                          placeholder={col.payment_method === 'Miscellaneous' ? 'e.g. 10, 20 (Press Enter to sum)' : '0.00'}
+                          disabled={isClosed}
+                          value={col.amount}
+                          onChange={(e) => {
+                            const newCollections = [...fuelCollections];
+                            newCollections[idx].amount = e.target.value;
+                            setFuelCollections(newCollections);
+                          }}
+                          onKeyDown={(e) => {
+                            if (col.payment_method === 'Miscellaneous' && e.key === 'Enter') {
+                              e.preventDefault();
+                              const newCollections = [...fuelCollections];
+                              newCollections[idx].amount = parseSumExpression(newCollections[idx].amount);
+                              setFuelCollections(newCollections);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (col.payment_method === 'Miscellaneous') {
+                              const newCollections = [...fuelCollections];
+                              newCollections[idx].amount = parseSumExpression(newCollections[idx].amount);
+                              setFuelCollections(newCollections);
+                            }
+                          }}
+                          className="w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-slate-900 focus:border-emerald-500 focus:outline-none text-xs font-bold"
+                        />
+                      </div>
+                    ) : null
+                  ))}
+                </div>
               </div>
 
               {/* Cash Deposits to Accounts */}
@@ -1671,85 +1794,68 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
 
               {/* Calculation preview panel - Light theme styling */}
               <div className="p-5 rounded-2xl bg-slate-55 border border-slate-200 space-y-4 text-xs">
-                <h4 className="font-bold text-slate-900 text-[10px] tracking-wider uppercase border-b border-slate-200 pb-2 font-display">Day Reconciliation Preview</h4>
+                <h4 className="font-bold text-slate-900 text-[10px] tracking-wider uppercase border-b border-slate-200 pb-2 font-display">Day Preview</h4>
 
-                {/* Top block: sales */}
                 <div className="space-y-2.5 font-semibold text-slate-700">
-                  <div className="flex justify-between">
-                    <span>Fuel Revenue (Total Sales):</span>
-                    <span className="text-slate-900 font-bold">₹{expectedRevLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200/80 pb-2.5">
-                    <span className="text-[10px] pl-3 italic text-slate-500">↳ Gross fuel nozzle sales:</span>
-                    <span className="text-slate-600 pl-3 italic font-bold">
-                      ₹{(expectedRevLive + tankLogs.reduce((acc, curr) => acc + (parseFloat(curr.testing_liters) || 0) * (nozzlesList.find(n => n.tank_id === curr.tank_id)?.product_price || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between text-[11px]">
-                    <span>Non-Cash Deductions / Expenditures:</span>
-                  </div>
-                  <div className="space-y-1.5 pl-3 border-l border-slate-200/80 my-2">
-                    {fuelCollections.filter(col => col.payment_method !== 'Miscellaneous').map((col) => {
-                      const amountVal = parseFloat(col.amount) || 0;
-                      if (amountVal === 0) return null;
-                      return (
-                        <div key={col.payment_method} className="flex justify-between text-[10px] text-rose-600 font-semibold">
-                          <span>↳ {col.payment_method}:</span>
-                          <span>-₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        </div>
-                      );
-                    })}
-                    {creditSalesSum > 0 && (
-                      <div className="flex justify-between text-[10px] text-rose-600 font-semibold">
-                        <span>↳ Credit Charges Slips:</span>
-                        <span>-₹{creditSalesSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </div>
-                    )}
-                    {fuelCollections.filter(col => col.payment_method !== 'Miscellaneous').every(c => (parseFloat(c.amount) || 0) === 0) && creditSalesSum === 0 && (
-                      <div className="text-[10px] text-slate-400 italic">No non-cash deductions today</div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-between text-xs font-bold pt-2.5 border-t border-slate-200/80">
-                    <span className="text-slate-900">Fuel Cash Collected Today:</span>
-                    <span className="text-emerald-600 font-extrabold">₹{fuelCashVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                </div>
-
-                {/* Cashbook block */}
-                <h4 className="font-bold text-slate-900 text-[10px] tracking-wider uppercase border-b border-slate-200 pt-2 pb-2 font-display">Cash Book Inflow</h4>
-                <div className="space-y-2.5 font-semibold text-slate-700">
-                  <div className="flex justify-between text-[11px]">
+                  <div className="flex justify-between text-[13px]">
                     <span>Opening Cash Book Balance:</span>
                     <span className="text-slate-900 font-bold">₹{(session?.opening_cash_balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                  <div className="flex justify-between text-[11px]">
-                    <span>+ Daily Fuel Cash Collection:</span>
-                    <span className="text-slate-900 font-semibold">₹{(parseFloat(fuelCash) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className="flex justify-between text-[11px]">
-                    <span>+ Credit Payments (Cash Collected):</span>
-                    <span className="text-slate-900 font-semibold">₹{creditPaymentsCashSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className="flex justify-between text-[11px]">
-                    <span>+ Other Items Cash Collected:</span>
-                    <span className="text-slate-900 font-semibold">₹{(parseFloat(miscCash) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+
+                  <div className="flex justify-between text-[11px] pt-1 text-emerald-600">
+                    <span>+ Revenue (Total Sales):</span>
+                    <span className="font-bold">+₹{expectedRevLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
 
-                  {(parseFloat(priorPeriodAdjustment) || 0) !== 0 && (
-                    <div className="flex justify-between text-[11px]">
-                      <span>+/- Prior Day Adjustments:</span>
-                      <span className={`font-semibold ${(parseFloat(priorPeriodAdjustment) || 0) < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        {(parseFloat(priorPeriodAdjustment) || 0) > 0 ? '+' : ''}₹{(parseFloat(priorPeriodAdjustment) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
+                  <div className="flex justify-between text-[11px] text-emerald-600">
+                    <span>+ Credit Payments (Cash Collected):</span>
+                    <span className="font-semibold">+₹{creditPaymentsCashSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+
+                  <div className="flex justify-between text-[11px] text-emerald-600">
+                    <span>+ Other Items Cash Collected:</span>
+                    <span className="font-semibold">+₹{(parseFloat(miscCash) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-200/80 pb-0.5">
+                  </div>
+
+
+
+                  {creditSalesSum > 0 && (
+                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold">
+                      <span>- Credit Charges:</span>
+                      <span>-₹{creditSalesSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+
+                  {creditSalesSum > 0 && (
+                    <div className="flex justify-between border-b border-slate-200/80 pb-0.5">
+                    </div>
+                  )}
+
+                  {fuelCollections.filter(col => col.payment_method !== 'Miscellaneous').map((col) => {
+                    const amountVal = parseFloat(col.amount) || 0;
+                    if (amountVal === 0) return null;
+                    return (
+                      <div key={col.payment_method} className="flex justify-between text-[11px] text-rose-600 font-semibold">
+                        <span>- {col.payment_method}:</span>
+                        <span>-₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex justify-between border-b border-slate-200/80 pb-0.5">
+                  </div>
+
+                  {miscExpenditureLive > 0 && (
+                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold">
+                      <span>- Miscellaneous Expenses:</span>
+                      <span>-₹{miscExpenditureLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   )}
 
                   {miscExpenditureLive > 0 && (
-                    <div className="flex justify-between text-[11px] text-rose-600 font-semibold">
-                      <span>- Miscellaneous Payouts:</span>
-                      <span>-₹{miscExpenditureLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <div className="flex justify-between border-b border-slate-200/80 pb-0.5">
                     </div>
                   )}
 
@@ -1766,33 +1872,47 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                       );
                     })}
 
-                  <div className="border-b border-slate-200/80 my-1 pb-0.5" />
 
-                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold shadow-2xs">
-                    <span className="text-slate-705">Closing Cash Balance:</span>
-                    <span className="text-emerald-600 font-extrabold">₹{closingCashLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <div className="flex justify-between border-b border-slate-200/80 pb-0.5">
                   </div>
 
-                  {priceChangeGainLossLive !== 0 && (
-                    <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs">
-                      <span className="text-slate-705">Price Change Inventory {priceChangeGainLossLive > 0 ? 'Gain' : 'Loss'}:</span>
-                      <span className={`font-extrabold ${priceChangeGainLossLive > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {priceChangeGainLossLive > 0 ? '+' : '-'}₹{Math.abs(priceChangeGainLossLive).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {(parseFloat(priorPeriodAdjustment) || 0) !== 0 && (
+                    <div className="flex justify-between text-[11px]">
+                      <span className={(parseFloat(priorPeriodAdjustment) || 0) < 0 ? 'text-rose-600' : 'text-emerald-600'}>+/- Prior Day Adjustments:</span>
+                      <span className={`font-semibold ${(parseFloat(priorPeriodAdjustment) || 0) < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {(parseFloat(priorPeriodAdjustment) || 0) > 0 ? '+' : ''}₹{(parseFloat(priorPeriodAdjustment) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                   )}
+
+                  <div className="flex justify-between text-[14px] mt-2 pt-2 pb-1 border-t-2 border-slate-800">
+                    <span className="text-slate-900 font-extrabold">Closing Cash Balance</span>
+                    <span className={`font-black ${closingCashLive < 0 ? 'text-rose-600' : 'text-slate-900'}`}>₹{closingCashLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
                 </div>
 
-                {/* Paytm credited into account */}
-                {paytmCreditedLive > 0 && (
-                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-white border border-slate-200/80 font-bold mt-2 shadow-2xs text-[11px]">
-                    <div>
-                      <span className="text-slate-600">Paytm Credited Into Account Today:</span>
-                      <div className="text-[9px] text-slate-400 font-medium mt-0.5">
-                        Paytm 3 today (₹{todayPaytm3.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) + Paytm 1 yesterday (₹{yesterdayPaytm1.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) + Paytm 2 yesterday (₹{yesterdayPaytm2.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                {(priceChangeGainLossLive !== 0 || paytmCreditedLive > 0) && (
+                  <div className="pt-4 mt-2 border-t border-slate-200/80 space-y-2.5">
+                    {priceChangeGainLossLive !== 0 && (
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-slate-700 font-bold">Price Change Inventory {priceChangeGainLossLive > 0 ? 'Gain' : 'Loss'}:</span>
+                        <span className={`font-extrabold ${priceChangeGainLossLive > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {priceChangeGainLossLive > 0 ? '+' : '-'}₹{Math.abs(priceChangeGainLossLive).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
                       </div>
-                    </div>
-                    <span className="text-emerald-600 font-extrabold">₹{paytmCreditedLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    )}
+
+                    {paytmCreditedLive > 0 && (
+                      <div className="flex justify-between items-start text-[11px]">
+                        <div className="flex flex-col">
+                          <span className="text-slate-700 font-bold">Paytm Credited To Bank Today:</span>
+                          <span className="text-[9px] text-slate-400 mt-0.5 leading-snug pr-4">
+                            Paytm 3 today (₹{todayPaytm3.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) + Paytm 1 & 2 yesterday (₹{(yesterdayPaytm1 + yesterdayPaytm2).toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                          </span>
+                        </div>
+                        <span className="text-emerald-600 font-extrabold whitespace-nowrap mt-0.5">+₹{paytmCreditedLive.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

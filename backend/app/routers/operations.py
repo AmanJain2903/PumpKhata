@@ -209,6 +209,21 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
             # Check if this product had a price change today
             old_price = price_change_cache.get(nozzle.tank.product_id)
             has_price_change = old_price is not None and old_price != price
+            
+            if has_price_change:
+                # Check if this nozzle has any non-initialization logs before today
+                # If not, it means the nozzle was just created or hasn't had real sales yet
+                has_real_logs = db.query(DailyNozzleLog).join(
+                    DailyLogSession, DailyNozzleLog.session_id == DailyLogSession.id
+                ).filter(
+                    DailyNozzleLog.nozzle_id == nozzle.id,
+                    DailyNozzleLog.log_date < log_date,
+                    DailyLogSession.is_initialization == False
+                ).first() is not None
+                
+                if not has_real_logs:
+                    has_price_change = False
+                    old_price = None
 
             prefill_nozzles.append(PrefillNozzleResponse(
                 nozzle_id=nozzle.id,
