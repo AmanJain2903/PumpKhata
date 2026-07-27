@@ -10,8 +10,19 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.routers import pumps, products, tanks, machines, credit, operations, reports, auth, users
 from app.core.security import get_current_user
+from app.tasks.cleanup import run_cleanup_task
+import asyncio
 
 IST = ZoneInfo("Asia/Kolkata")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the background cleanup task
+    cleanup_task = asyncio.create_task(run_cleanup_task())
+    yield
+    # Cancel the task during shutdown
+    cleanup_task.cancel()
+
 
 
 # Load environment configurations if any
@@ -22,7 +33,8 @@ app = FastAPI(
     description="Fuel Pump Station Management Enterprise Ledger API",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # CORS configuration
