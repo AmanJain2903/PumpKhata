@@ -21,6 +21,7 @@ class DailyLogSession(Base):
     opened_at = Column(DateTime(timezone=True), nullable=False)
 
     closed_at = Column(DateTime(timezone=True), nullable=True)
+    closed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Financial Summary (written on Close)
     opening_cash_balance = Column(Numeric(12, 2), nullable=False)
@@ -52,6 +53,7 @@ class DailyLogSession(Base):
     collections = relationship("DailyLogSessionPayment", back_populates="session", cascade="all, delete-orphan")
     account_transactions = relationship("PumpAccountTransaction", back_populates="session", cascade="all, delete-orphan")
     price_change_records = relationship("PriceChangeGainLoss", back_populates="session", cascade="all, delete-orphan")
+    closed_by = relationship("User")
 
     @classmethod
     def get_next_valid_date(cls, db: Session, pump_id: int) -> date:

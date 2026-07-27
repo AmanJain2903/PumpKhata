@@ -14,6 +14,8 @@ from app.models.tank import Tank
 from app.models.product import Product, ProductPriceHistory
 from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog, DailyLogSession, DailyLogSessionStatus
 from app.models.credit import CreditAccount, CreditTransaction, CreditTransactionType, PaymentMethodType
+from app.core.security import get_current_user
+from app.models.user import User
 from app.schemas.timezone_helper import localize_datetime
 from app.schemas.log import (
     DailyNozzleLogResponse,
@@ -659,7 +661,7 @@ def save_session_misc(session_id: int, req: MiscSave, db: Session = Depends(get_
     return {"status": "success", "message": "Miscellaneous expenditure saved"}
 
 @router.post("/session/{session_id}/close")
-def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depends(get_db)):
+def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Atomically computes reconciliation calculations, updates tank baselines, and closes the session."""
     session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
     if not session:
@@ -784,6 +786,7 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
     # Update session summary values
     session.status = DailyLogSessionStatus.CLOSED
     session.closed_at = datetime.now(IST)
+    session.closed_by_id = current_user.id
     session.fuel_cash_collected = fuel_cash_collected
     session.fuel_digital_collected = fuel_digital_collected
     session.credit_sales_total = credit_sales_total
