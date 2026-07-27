@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import type { FuelPump, Product } from '../services/api';
-import { useAuth } from '../context/AuthContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { SmartDropdown } from '../components/SmartDropdown';
 import { NavBar } from '../components/NavBar';
@@ -49,7 +48,6 @@ interface SubmitProgressState {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout, onManageUsers }) => {
-  const { user } = useAuth();
   const [subView, setSubView] = useState<'home' | 'manage-products' | 'manage-credit-accounts'>('home');
   const [pumps, setPumps] = useState<FuelPump[]>([]);
   const [products, setProducts] = useState<Product[]>([]);

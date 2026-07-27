@@ -789,7 +789,6 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const expectedRevLive = getLiveExpectedRevenue();
 
   const fuelCashVal = expectedRevLive - creditSalesSum - fuelDigitalVal;
-  const fuelCash = String(fuelCashVal);
   const miscExpenditureLive = parseFloat(fuelCollections.find(c => c.payment_method === 'Miscellaneous')?.amount || '0') || 0;
 
   // Summaries

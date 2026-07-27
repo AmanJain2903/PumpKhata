@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/api';
 import type { FuelPump, Tank, Machine, Nozzle, Product, CreditAccount } from '../services/api';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -18,8 +17,6 @@ interface ManageStationProps {
 }
 
 export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, onLogout, onManageUsers }) => {
-  const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'daily' | 'meter_testing' | 'tanks' | 'reports' | 'statements'>('daily');
   const [pump, setPump] = useState<FuelPump | null>(null);
   const [tanks, setTanks] = useState<Tank[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
