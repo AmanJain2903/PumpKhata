@@ -49,6 +49,7 @@ app.include_router(reports.router, prefix="/api", dependencies=protected)
 app.include_router(users.router, prefix="/api", dependencies=protected)
 
 @app.get("/")
+@app.head("/")
 def read_root():
     return {
         "status": "healthy",
