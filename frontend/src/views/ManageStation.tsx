@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/api';
 import type { FuelPump, Tank, Machine, Nozzle, Product, CreditAccount } from '../services/api';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { NavBar } from '../components/NavBar';
 import { SmartDropdown } from '../components/SmartDropdown';
+import { DailyLogWorkspace } from './DailyLogWorkspace';
+import { DateRangeCalendar } from '../components/DateRangeCalendar';
+import { parseSumExpression } from '../utils/math';
+
 
 interface ManageStationProps {
   pumpId: number;
   onBack: () => void;
   onLogout: () => void;
+  onManageUsers?: () => void;
 }
 
-export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, onLogout }) => {
+export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, onLogout, onManageUsers }) => {
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<'daily' | 'meter_testing' | 'tanks' | 'reports' | 'statements'>('daily');
   const [pump, setPump] = useState<FuelPump | null>(null);
   const [tanks, setTanks] = useState<Tank[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -19,6 +28,34 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [customProductColors, setCustomProductColors] = useState<Record<string, any>>({});
+  const [activeView, setActiveView] = useState<'manage' | 'ops_log'>('manage');
+  const [todayLogStatus, setTodayLogStatus] = useState<'NOT_LOGGED' | 'OPEN' | 'CLOSED'>('NOT_LOGGED');
+  const [workspaceKey, setWorkspaceKey] = useState(0);
+  const [hasLogs, setHasLogs] = useState(false);
+
+  const getISTDateString = () => {
+    const now = new Date();
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const istTime = new Date(utcTime + (5.5 * 3600000));
+
+    const yyyy = istTime.getFullYear();
+    const mm = String(istTime.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTime.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const handleReopenSession = async () => {
+    try {
+      const summary = await apiService.getSessionSummary(pumpId);
+      if (summary && summary.session_id) {
+        await apiService.reopenSession(summary.session_id);
+        await fetchStationConfig();
+        setWorkspaceKey(prev => prev + 1);
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to re-open session");
+    }
+  };
 
   // Interactive customization state hooks
   const [isEditing, setIsEditing] = useState(false);
@@ -27,6 +64,24 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [draftMachines, setDraftMachines] = useState<any[]>([]);
   const [draftNozzles, setDraftNozzles] = useState<any[]>([]);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
+  // Reports states
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportStep, setReportStep] = useState<1 | 2>(1);
+  const [reportMinDate, setReportMinDate] = useState('');
+  const [reportMaxDate, setReportMaxDate] = useState('');
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [isFetchingBoundaries, setIsFetchingBoundaries] = useState(false);
+
+  // Report Financial Inputs State
+  const [reportMargins, setReportMargins] = useState<Record<number, string>>({});
+  const [reportBankExpenditure, setReportBankExpenditure] = useState('');
+  const [reportIoclExpenditure, setReportIoclExpenditure] = useState('');
+  const [reportSalaryExpenditure, setReportSalaryExpenditure] = useState('');
+  const [reportMiscExpenditure, setReportMiscExpenditure] = useState('');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportDownloadMessage, setReportDownloadMessage] = useState('');
 
   // Tank Edit Modal states
   const [editingTank, setEditingTank] = useState<any | null>(null);
@@ -54,6 +109,34 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [isEditingPumpName, setIsEditingPumpName] = useState(false);
   const [pumpNameInput, setPumpNameInput] = useState('');
   const [isSavingPumpName, setIsSavingPumpName] = useState(false);
+
+  // Station Accounts states
+  const [pumpAccounts, setPumpAccounts] = useState<any[]>([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [newAccountName, setNewAccountName] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState<'TILL_DATE' | 'CURRENT_MONTH' | 'LAST_MONTH'>('TILL_DATE');
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [accountError, setAccountError] = useState('');
+  const [isPaytmLinked, setIsPaytmLinked] = useState(false);
+  const [showPaytmWarning, setShowPaytmWarning] = useState(false);
+  const [existingPaytmAccountName, setExistingPaytmAccountName] = useState('');
+
+  const handlePaytmCheckboxChange = (checked: boolean) => {
+    if (checked) {
+      const existingLinked = pumpAccounts.find((a: any) => a.is_paytm_linked);
+      if (existingLinked) {
+        setExistingPaytmAccountName(existingLinked.name);
+        setShowPaytmWarning(true);
+        return;
+      }
+    }
+    setIsPaytmLinked(checked);
+  };
+
+  const [deletingAccount, setDeletingAccount] = useState<any | null>(null);
+  const [isDeleteAccountOpen, setIsDeleteAccountOpen] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState('');
 
   // Scroll to top on component mount or pumpId change
   useEffect(() => {
@@ -95,10 +178,11 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     }
   }, [isLoading]);
 
-  // Lock body scroll when any modal (tank edit or delete station) is open
-  const anyModalOpen = isTankModalOpen || isDeletePumpModalOpen;
+  // Lock body scroll when any modal is open
+  const anyModalOpen = isTankModalOpen || isDeletePumpModalOpen || isReportModalOpen || isAccountModalOpen || isDeleteAccountOpen;
   useBodyScrollLock(anyModalOpen);
 
+  const [activeSessionDate, setActiveSessionDate] = useState<string | null>(null);
 
   useEffect(() => {
     fetchStationConfig();
@@ -116,6 +200,41 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       alert(err.message || 'Failed to toggle station status');
     } finally {
       setIsTogglingActive(false);
+    }
+  };
+
+  const handleOpenReportModal = async () => {
+    setIsReportModalOpen(true);
+    setReportStep(1);
+    setIsFetchingBoundaries(true);
+    setReportMinDate('');
+    setReportMaxDate('');
+    setReportStartDate('');
+    setReportEndDate('');
+
+    // Initialize margins state from products
+    const initialMargins: Record<number, string> = {};
+    products.forEach(p => {
+      initialMargins[p.id] = String(p.current_margin);
+    });
+    setReportMargins(initialMargins);
+    setReportBankExpenditure('');
+    setReportIoclExpenditure('');
+    setReportSalaryExpenditure('');
+    setReportMiscExpenditure('');
+
+    try {
+      const data = await apiService.getReportBoundaries(pumpId);
+      if (data.min_date && data.max_date) {
+        setReportMinDate(data.min_date);
+        setReportMaxDate(data.max_date);
+        setReportStartDate(data.min_date);
+        setReportEndDate(data.max_date);
+      }
+    } catch (err: any) {
+      console.error('Failed to load report boundaries', err);
+    } finally {
+      setIsFetchingBoundaries(false);
     }
   };
 
@@ -184,10 +303,13 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     try {
       const config = await apiService.getPumpConfig(pumpId);
       setPump(config.pump);
+      setHasLogs(config.has_logs || false);
+      setPumpAccounts(config.pump_accounts || []);
 
       // Sort tanks alphabetically
       const sortedTanks = [...config.tanks].sort((a, b) => a.name.localeCompare(b.name));
       setTanks(sortedTanks);
+      setProducts(config.products || []);
 
       // Sort machines alphabetically
       const sortedMachines = [...config.machines].sort((a, b) => a.name.localeCompare(b.name));
@@ -198,8 +320,18 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       setNozzles(configNozzles);
 
       // Save products list
-      setProducts(config.products || []);
+      const allProducts = await apiService.getProducts();
+      setProducts(allProducts);
+
+      // Fetch today's log status
+      try {
+        const summary = await apiService.getSessionSummary(pumpId);
+        setTodayLogStatus(summary.status);
+      } catch (err) {
+        console.error('Failed to fetch session summary', err);
+      }
     } catch (err: any) {
+
       setError(err.message || 'Failed to fetch station forecourt configuration.');
     } finally {
       setIsLoading(false);
@@ -402,6 +534,52 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const handleCancelEdit = () => {
     setIsEditing(false);
     setValidationErrors([]);
+  };
+
+  // --- Station Accounts CRUD Actions ---
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError('');
+    if (!newAccountName.trim()) {
+      setAccountError('Account name cannot be empty.');
+      return;
+    }
+
+    setIsCreatingAccount(true);
+    try {
+      await apiService.createPumpAccount(pumpId, newAccountName.trim(), isPaytmLinked);
+      setNewAccountName('');
+      setIsPaytmLinked(false);
+      setIsAccountModalOpen(false);
+      await fetchStationConfig();
+    } catch (err: any) {
+      setAccountError(err.message || 'Failed to create station account.');
+    } finally {
+      setIsCreatingAccount(false);
+    }
+  };
+
+  const handleInitiateDeleteAccount = (account: any) => {
+    setDeletingAccount(account);
+    setDeleteAccountError('');
+    setIsDeletingAccount(false);
+    setIsDeleteAccountOpen(true);
+  };
+
+  const handleConfirmDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    setIsDeletingAccount(true);
+    setDeleteAccountError('');
+    try {
+      await apiService.deletePumpAccount(pumpId, deletingAccount.id);
+      setIsDeleteAccountOpen(false);
+      setDeletingAccount(null);
+      await fetchStationConfig();
+    } catch (err: any) {
+      setDeleteAccountError(err.message || 'Failed to delete station account.');
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   // --- Tank Editing Operations ---
@@ -751,48 +929,33 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
 
 
+
+  const formatLocalDateStr = (dStr: string) => {
+    if (!dStr) return '';
+    const [y, m, d] = dStr.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans relative overflow-x-hidden">
+
       {/* Light-theme ambient decorative glows */}
       <div className="absolute top-0 right-1/4 w-[500px] h-[550px] bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
       {/* Sticky Top Navigation Bar */}
-      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div
-              onClick={onBack}
-              className="flex items-center gap-3 cursor-pointer select-none"
-            >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-400 to-emerald-400 via-emerald-600 flex items-center justify-center shadow-md shadow-emerald-500/10">
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 6a2 2 0 012-2h6a2 2 0 012 2v14H5V6zm3 3h4v3H8V9zm8 2h1.5a1.5 1.5 0 011.5 1.5v3.75c0 .966.534 1.75 1.25 1.75s1.25-.784 1.25-1.75V6M3 20h14" />
-                </svg>
-              </div>
-              <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-emerald-400 via-emerald-600 bg-clip-text text-transparent font-display">
-                PumpKhata
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onLogout}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors border border-slate-200 hover:border-slate-300 bg-white px-3 py-1.5 rounded-xl shadow-sm cursor-pointer"
-              >
-                Log Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <NavBar
+        onLogoClick={onBack}
+        onLogout={onLogout}
+        onManageUsers={onManageUsers}
+      />
 
       {/* Main Content Workspace Container */}
-      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10 w-full">
+      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">
         {/* Navigation Breadcrumb, title, and action edit modes */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 pb-6 border-b border-slate-200">
           <div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 mb-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-550 mb-2">
               <button
                 onClick={onBack}
                 className="hover:text-emerald-600 transition-colors flex items-center gap-1 cursor-pointer"
@@ -800,9 +963,32 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 Dashboard
               </button>
               <span>/</span>
-              <span className="text-slate-800">{pump?.name || 'Loading...'}</span>
+              {activeView === 'ops_log' ? (
+                <button
+                  onClick={() => {
+                    setActiveView('manage');
+                    fetchStationConfig();
+                  }}
+                  className="hover:text-emerald-600 transition-colors cursor-pointer"
+                >
+                  {pump?.name || 'Station'}
+                </button>
+              ) : (
+                <span className="text-slate-800">{pump?.name || 'Loading...'}</span>
+              )}
+              {activeView === 'ops_log' && (
+                <>
+                  <span>/</span>
+                  <span className="text-slate-800 font-bold">Daily Operations Log</span>
+                </>
+              )}
             </div>
-            {isEditingPumpName ? (
+
+            {activeView === 'ops_log' ? (
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display flex items-center gap-3">
+                Daily Operations Log
+              </h1>
+            ) : isEditingPumpName ? (
               <div className="flex items-center gap-2 mt-1.5 animate-fadeIn">
                 <input
                   type="text"
@@ -862,154 +1048,538 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 )}
               </h1>
             )}
-            <p className="text-sm text-slate-500 mt-1">
-              {pump?.location || 'Forecourt operations workspace'}
-            </p>
+
+            {activeView === 'ops_log' ? (
+              <p className="text-xs text-slate-500 mt-1 flex items-center gap-2 font-bold uppercase tracking-wider">
+                <span className={
+                  activeSessionDate && activeSessionDate < getISTDateString()
+                    ? 'px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md font-extrabold shadow-sm'
+                    : 'text-slate-700'
+                }>
+                  {activeSessionDate || getISTDateString()}
+                </span>
+                <span>•</span>
+                <span className={`rounded-md text-[9px] font-extrabold tracking-wide uppercase ${todayLogStatus === 'CLOSED' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : 'Open 🟢'}
+                </span>
+              </p>
+            ) : (
+              <p className="text-sm text-slate-500 mt-1">
+                {pump?.location || 'Forecourt operations workspace'}
+              </p>
+            )}
           </div>
 
-          {pump && (
-            <div className="flex items-center gap-2.5 shrink-0">
-              {pump.is_active === false ? (
-                <button
-                  onClick={handleToggleStationActive}
-                  disabled={isTogglingActive}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer border border-emerald-650"
-                >
-                  Activate Station
-                </button>
-              ) : (
-                <button
-                  onClick={handleToggleStationActive}
-                  disabled={isTogglingActive}
-                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
-                >
-                  Deactivate Station
-                </button>
-              )}
+          {activeView === 'ops_log' ? (
+            todayLogStatus === 'CLOSED' && (
               <button
-                onClick={handleOpenDeletePumpModal}
-                disabled={isTogglingActive || isDeletingPump}
-                className="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                onClick={handleReopenSession}
+                className="py-2.5 px-4 rounded-xl text-xs font-bold uppercase bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
               >
-                Delete Station
+                🔓 Re-open today's session
               </button>
-            </div>
+            )
+          ) : (
+            pump && (
+              <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                <button
+                  onClick={handleOpenReportModal}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                >
+                  <span>Generate Report</span>
+                </button>
+                {pump.is_active === false ? (
+                  <button
+                    onClick={handleToggleStationActive}
+                    disabled={isTogglingActive}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer border border-emerald-600"
+                  >
+                    Activate Station
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleToggleStationActive}
+                    disabled={isTogglingActive}
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                  >
+                    Deactivate Station
+                  </button>
+                )}
+                <button
+                  onClick={handleOpenDeletePumpModal}
+                  disabled={isTogglingActive || isDeletingPump}
+                  className="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  Delete Station
+                </button>
+              </div>
+            )
           )}
         </div>
 
-        {/* Validation Errors alert panel */}
-        {validationErrors.length > 0 && (
-          <div className="mb-6 p-5 bg-rose-50 border border-rose-150 rounded-2xl text-rose-800 animate-fadeIn">
-            <h4 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <span>⚠️ Configuration Validation Failed</span>
-            </h4>
-            <ul className="list-disc list-inside text-xs space-y-1.5">
-              {validationErrors.map((err, idx) => (
-                <li key={idx} className="font-semibold">{err}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Tab Workspaces */}
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-24 bg-white border border-slate-200 rounded-3xl shadow-sm">
-            <svg className="animate-spin h-10 w-10 text-emerald-600" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <span className="text-slate-500 text-sm mt-4 font-semibold">Retrieving forecourt configuration...</span>
-          </div>
-        ) : error ? (
-          <div className="p-6 bg-rose-50 border border-rose-200 text-sm text-rose-600 rounded-3xl shadow-sm">
-            {error}
-          </div>
+        {activeView === 'ops_log' ? (
+          <DailyLogWorkspace
+            key={workspaceKey}
+            pumpId={pumpId}
+            onBack={() => {
+              setActiveView('manage');
+              setActiveSessionDate(null);
+              fetchStationConfig();
+            }}
+            onSessionLoaded={(session) => {
+              setActiveSessionDate(session.log_date);
+            }}
+          />
         ) : (
-          <div className="space-y-8 animate-scaleIn">
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 font-display">Station Map</h3>
-                  <p className="text-xs text-slate-450 mt-0.5">
-                    {isEditing
-                      ? 'Customizing layout. Save changes to commit to database.'
-                      : pump?.is_active === false
-                        ? 'This station is currently inactive. Re-activate to resume daily logs and highlighted operations.'
-                        : 'Hover over a tank or nozzle to highlight physical connections'}
-                  </p>
+          <>
+            {/* Daily Operations Ledger Callout Banner */}
+            {pump && pump.is_active !== false && (
+              <div className="mb-6 p-6 rounded-3xl bg-gradient-to-r from-emerald-500/10 to-teal-500/5 border border-emerald-500/20 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6 animate-fadeIn">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-200/60 flex items-center justify-center text-emerald-700 shrink-0 shadow-sm">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-slate-800 tracking-tight font-display">Daily Operations Ledger</h4>
+                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                      <span>Today's Date:</span>
+                      <span className="font-extrabold text-slate-700">{getISTDateString()}</span>
+                      <span className="text-slate-300">•</span>
+                      <span>Status:</span>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${todayLogStatus === 'CLOSED'
+                        ? 'bg-rose-50 text-rose-700 border border-rose-250'
+                        : todayLogStatus === 'OPEN'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-250'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}>
+                        {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : todayLogStatus === 'OPEN' ? 'In Progress ⚡' : 'Not Started 📝'}
+                      </span>
+                    </p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={handleCancelEdit}
-                        disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-350 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all shadow-sm cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveConfiguration}
-                        disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-650 hover:to-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
-                      >
-                        {isSaving && (
-                          <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                        )}
-                        Save Layout Changes
-                      </button>
-                    </>
+                <div className="flex items-center gap-3 shrink-0">
+
+                  {todayLogStatus === 'CLOSED' ? (
+                    <button
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                    >
+                      <span>👁️ View Today's Closed Ledger</span>
+                    </button>
+                  ) : todayLogStatus === 'OPEN' ? (
+                    <button
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
+                    >
+                      <span>⚡ Continue Today's Log</span>
+                    </button>
                   ) : (
                     <button
-                      onClick={handleStartEdit}
-                      className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                      onClick={() => setActiveView('ops_log')}
+                      className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                      Edit Station Map
+                      <span>Log Today ✍️</span>
                     </button>
                   )}
                 </div>
               </div>
+            )}
 
-              {tanks.length === 0 && !isEditing ? (
-                <div className="text-center py-16 bg-slate-50/50 border border-dashed border-slate-200 rounded-2xl">
-                  <p className="text-xs text-slate-500 font-semibold">No equipment configured for this pump station.</p>
-                </div>
-              ) : isEditing ? (
-                <div className="space-y-8 relative min-h-[480px]">
+            {/* Validation Errors alert panel */}
+            {validationErrors.length > 0 && (
+              <div className="mb-6 p-5 bg-rose-50 border border-rose-150 rounded-2xl text-rose-800 animate-fadeIn">
+                <h4 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <span>⚠️ Configuration Validation Failed</span>
+                </h4>
+                <ul className="list-disc list-inside text-xs space-y-1.5">
+                  {validationErrors.map((err, idx) => (
+                    <li key={idx} className="font-semibold">{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-                  {/* 1. Storage Tanks Section (Top Stack) */}
-                  <div className="space-y-4">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Underground Tanks
-                    </span>
+            {/* Tab Workspaces */}
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center py-24 bg-white border border-slate-200 rounded-3xl shadow-sm">
+                <svg className="animate-spin h-10 w-10 text-emerald-600" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="text-slate-500 text-sm mt-4 font-semibold">Retrieving forecourt configuration...</span>
+              </div>
+            ) : error ? (
+              <div className="p-6 bg-rose-50 border border-rose-200 text-sm text-rose-600 rounded-3xl shadow-sm">
+                {error}
+              </div>
+            ) : (
+              <div className="space-y-8 animate-scaleIn">
+                <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 font-display">Station Map</h3>
+                      <p className="text-xs text-slate-450 mt-0.5">
+                        {isEditing
+                          ? 'Customizing layout. Save changes to commit to database.'
+                          : pump?.is_active === false
+                            ? 'This station is currently inactive. Re-activate to resume daily logs and highlighted operations.'
+                            : 'Hover over a tank or nozzle to highlight physical connections'}
+                      </p>
+                    </div>
 
-                    <div className="grid grid-cols-1 gap-4">
-                      {draftTanks.map((tank) => {
-                        const productColors = getProductColor(tank.product_name || '');
-                        const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
-                        const isHighlighted = isTankHighlighted(tank.id || tank.temp_id);
-                        const varianceVal = parseFloat(tank.variance as any) || 0;
-
-                        return (
-                          <div
-                            key={tank.id || tank.temp_id}
-                            onMouseEnter={() => setHoveredTankId(tank.id || tank.temp_id)}
-                            onMouseLeave={() => setHoveredTankId(null)}
-                            className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
-                              ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
-                              : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
-                              }`}
+                    <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
+                      {isEditing ? (
+                        <>
+                          <button
+                            onClick={handleCancelEdit}
+                            disabled={isSaving}
+                            className="px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-350 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all shadow-sm cursor-pointer"
                           >
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                              {/* Left details */}
-                              <div className="flex items-center gap-4 min-w-[200px]">
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveConfiguration}
+                            disabled={isSaving}
+                            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                          >
+                            {isSaving && (
+                              <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            )}
+                            Save Layout Changes
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={handleStartEdit}
+                          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                          Edit Station Map
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {tanks.length === 0 && !isEditing ? (
+                    <div className="text-center py-16 bg-slate-50/50 border border-dashed border-slate-200 rounded-2xl">
+                      <p className="text-xs text-slate-500 font-semibold">No equipment configured for this pump station.</p>
+                    </div>
+                  ) : isEditing ? (
+                    <div className="space-y-8 relative min-h-[480px]">
+
+                      {/* 1. Storage Tanks Section (Top Stack) */}
+                      <div className="space-y-4">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Underground Tanks
+                        </span>
+
+                        <div className="grid grid-cols-1 gap-4">
+                          {draftTanks.map((tank) => {
+                            const productColors = getProductColor(tank.product_name || '');
+                            const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
+                            const isHighlighted = isTankHighlighted(tank.id || tank.temp_id);
+                            const varianceVal = parseFloat(tank.variance as any) || 0;
+
+                            return (
+                              <div
+                                key={tank.id || tank.temp_id}
+                                onMouseEnter={() => setHoveredTankId(tank.id || tank.temp_id)}
+                                onMouseLeave={() => setHoveredTankId(null)}
+                                className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
+                                  ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
+                                  : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
+                                  }`}
+                              >
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                                  {/* Left details */}
+                                  <div className="flex items-center gap-4 min-w-[200px]">
+                                    <div>
+                                      <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
+                                      <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
+                                        {tank.product_name}
+                                      </span>
+                                    </div>
+
+                                    {varianceVal !== 0 && (
+                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${varianceVal > 0
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-250'
+                                        : 'bg-rose-50 text-rose-700 border-rose-250'
+                                        }`}>
+                                        {varianceVal > 0 ? `+${varianceVal.toFixed(1)} L` : `${varianceVal.toFixed(1)} L`}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Center Level Fill cylinder */}
+                                  <div className="flex-grow max-w-xl space-y-1.5 w-full">
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                                      <span>Level</span>
+                                      <span>{fillPercent.toFixed(1)}% Filled</span>
+                                    </div>
+
+                                    <div className="h-6 w-full rounded-lg bg-slate-100 border border-slate-200 overflow-hidden relative shadow-inner">
+                                      <div
+                                        className={`absolute top-0 bottom-0 left-0 rounded-r-md transition-all duration-700 ${productColors.bg}`}
+                                        style={{ width: `${fillPercent}%` }}
+                                      />
+                                      <div className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-slate-700 mix-blend-difference tracking-wider font-sans">
+                                        {parseFloat(tank.actual_dip_volume as any).toLocaleString()} / {parseFloat(tank.max_capacity as any).toLocaleString()} Ltrs
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Tank configuration buttons */}
+                                  {!hasLogs && (
+                                    <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
+                                      <button
+                                        onClick={() => handleOpenEditTankModal(tank)}
+                                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
+                                        title="Edit Tank Details"
+                                      >
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                        </svg>
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteTank(tank)}
+                                        className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                        title="Delete Tank"
+                                      >
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {!hasLogs && (
+                          <button
+                            onClick={handleOpenAddTankModal}
+                            className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                            Add Storage Tank
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dispenser Units Section (Bottom Stack) */}
+                      <div className="space-y-4 pt-8 border-t border-slate-100">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Dispenser Units
+                        </span>
+
+                        <div className="grid grid-cols-1 gap-6">
+                          {draftMachines.map((mach) => {
+                            const machKey = mach.id || mach.temp_id;
+                            const machineNozzles = draftNozzles.filter(n => (mach.id && n.machine_id === mach.id) || (mach.temp_id && n.machine_temp_id === mach.temp_id));
+
+                            return (
+                              <div
+                                key={machKey}
+                                className="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm relative animate-fadeIn"
+                              >
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                                  <input
+                                    type="text"
+                                    value={mach.name}
+                                    onChange={(e) => handleRenameMachine(mach, e.target.value)}
+                                    className="text-sm font-extrabold text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-grow bg-slate-50 focus:bg-white focus:outline-emerald-500 w-full"
+                                    disabled={hasLogs}
+                                  />
+
+                                  <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
+                                    <label className="flex items-center gap-1.5 text-xs font-bold text-slate-500 cursor-pointer select-none shrink-0 border border-slate-200 rounded-lg px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 transition-colors shadow-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={mach.is_active !== false}
+                                        onChange={() => handleToggleMachineActive(machKey, mach.is_active !== false)}
+                                        className="accent-emerald-600 cursor-pointer"
+                                      />
+                                      <span>Active</span>
+                                    </label>
+
+                                    {!hasLogs && (
+                                      <button
+                                        onClick={() => handleDeleteMachine(mach)}
+                                        className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
+                                        title="Delete Dispenser"
+                                      >
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+                                  {machineNozzles.map((nozzle) => {
+                                    const nozzleKey = nozzle.id || nozzle.temp_id;
+                                    const colors = getProductColor(nozzle.product_name || '');
+                                    const isHighlighted = isNozzleHighlighted(nozzle);
+
+                                    return (
+                                      <div
+                                        key={nozzleKey}
+                                        onMouseEnter={() => setHoveredNozzleId(nozzleKey)}
+                                        onMouseLeave={() => setHoveredNozzleId(null)}
+                                        className={`p-4 rounded-xl border transition-all duration-300 select-none ${isHighlighted
+                                          ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
+                                          : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
+                                          } ${nozzle.is_active === false ? 'opacity-65 bg-slate-105/50 border-slate-200' : ''}`}
+                                      >
+                                        <div className="space-y-3">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <input
+                                              type="text"
+                                              value={nozzle.name}
+                                              onChange={(e) => handleRenameNozzle(nozzleKey, e.target.value)}
+                                              className="text-xs font-bold text-slate-700 border border-slate-200 rounded px-2 py-1 w-full bg-white focus:outline-emerald-500"
+                                              placeholder="Nozzle Label"
+                                              disabled={nozzle.is_active === false || hasLogs}
+                                            />
+
+                                            <input
+                                              type="checkbox"
+                                              checked={nozzle.is_active !== false}
+                                              onChange={() => handleToggleNozzleActive(nozzleKey, nozzle.is_active !== false)}
+                                              className="accent-emerald-600 cursor-pointer shrink-0 w-3.5 h-3.5"
+                                              title="Toggle Nozzle Active Status"
+                                            />
+
+                                            {!hasLogs && (
+                                              <button
+                                                onClick={() => handleDeleteNozzle(nozzleKey)}
+                                                className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
+                                                title="Delete Nozzle"
+                                              >
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                              </button>
+                                            )}
+                                          </div>
+
+                                          {nozzle.is_active !== false ? (
+                                            <>
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Tank Source</label>
+                                                <SmartDropdown
+                                                  value={nozzle.tank_id?.toString() || ''}
+                                                  onChange={(val) => handleReconnectNozzle(nozzleKey, val)}
+                                                  placeholder="-- Disconnected --"
+                                                  options={[
+                                                    { value: '', label: '-- Disconnected --' },
+                                                    ...draftTanks.map(t => ({
+                                                      value: (t.id || t.temp_id).toString(),
+                                                      label: `${t.name} (${t.product_name})`,
+                                                    }))
+                                                  ]}
+                                                  className="!rounded-lg !py-1.5"
+                                                  disabled={hasLogs}
+                                                />
+                                              </div>
+
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Base Meter Reading</label>
+                                                <input
+                                                  type="number"
+                                                  value={nozzle.opening_reading || 0}
+                                                  onChange={(e) => handleNozzleReadingChange(nozzleKey, parseFloat(e.target.value) || 0)}
+                                                  className="w-full text-xs border border-slate-200 rounded p-1.5 focus:outline-emerald-500"
+                                                  min="0"
+                                                  placeholder="Last shift closing reading"
+                                                  disabled={hasLogs}
+                                                />
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div className="text-[10px] text-slate-400 italic text-center py-2.5 font-bold bg-slate-100 rounded-lg border border-slate-200">
+                                              Inactive Nozzle
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {!hasLogs && (
+                                  <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
+                                    <button
+                                      onClick={() => handleAddNewNozzle(mach)}
+                                      className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                                      </svg>
+                                      Add Nozzle
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {!hasLogs && (
+                          <button
+                            onClick={handleAddMachine}
+                            className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                            Add Dispenser Unit
+                          </button>
+                        )}
+                      </div>
+
+                    </div>
+                  ) : (
+                    /* 3-column map layout when viewing */
+                    <div className={`grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch relative min-h-[480px] transition-all duration-300 ${pump?.is_active === false ? 'opacity-65 grayscale-[40%] pointer-events-none' : ''
+                      }`}>
+
+                      {/* 1. Storage Tanks Section (Left) */}
+                      <div className="lg:col-span-4 space-y-6 flex flex-col justify-center">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Underground Tanks
+                        </span>
+
+                        {tanks.map((tank) => {
+                          const productColors = getProductColor(tank.product_name || '');
+                          const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
+                          const isHighlighted = isTankHighlighted(tank.id);
+                          const varianceVal = parseFloat(tank.variance as any) || 0;
+
+                          return (
+                            <div
+                              key={tank.id}
+                              onMouseEnter={() => setHoveredTankId(tank.id)}
+                              onMouseLeave={() => setHoveredTankId(null)}
+                              className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
+                                ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
+                                : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
+                                }`}
+                            >
+                              <div className="flex justify-between items-start gap-3">
                                 <div>
                                   <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
                                   <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
@@ -1027,8 +1597,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                 )}
                               </div>
 
-                              {/* Center Level Fill cylinder */}
-                              <div className="flex-grow max-w-xl space-y-1.5 w-full">
+                              {/* Cylindrical Tank Meter */}
+                              <div className="mt-4 space-y-1.5">
                                 <div className="flex justify-between text-[10px] font-bold text-slate-400">
                                   <span>Level</span>
                                   <span>{fillPercent.toFixed(1)}% Filled</span>
@@ -1044,374 +1614,210 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                   </div>
                                 </div>
                               </div>
-
-                              {/* Tank configuration buttons */}
-                              <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
-                                <button
-                                  onClick={() => handleOpenEditTankModal(tank)}
-                                  className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
-                                  title="Edit Tank Details"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                  </svg>
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteTank(tank)}
-                                  className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                  title="Delete Tank"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
 
-                    <button
-                      onClick={handleOpenAddTankModal}
-                      className="w-full py-3.5 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      Add Storage Tank
-                    </button>
-                  </div>
+                      {/* 2. Interactive Flow Pipeline Column (Middle) */}
+                      <div className="hidden lg:col-span-3 lg:flex flex-col justify-around items-center py-10 relative select-none">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2 w-full text-center">
+                          Supply Lines
+                        </span>
 
-                  {/* Dispenser Units Section (Bottom Stack) */}
-                  <div className="space-y-4 pt-8 border-t border-slate-100">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Dispenser Units
-                    </span>
+                        <div className="flex flex-col gap-6 justify-center items-center w-full flex-grow">
+                          {tanks.map((tank) => {
+                            const isTankHovered = hoveredTankId === tank.id;
+                            const isNozzleConnecting = hoveredNozzleId !== null && nozzles.find(n => n.id === hoveredNozzleId)?.tank_id === tank.id;
+                            const isActive = isTankHovered || isNozzleConnecting;
+                            const colors = getProductColor(tank.product_name || '');
 
-                    <div className="grid grid-cols-1 gap-6">
-                      {draftMachines.map((mach) => {
-                        const machKey = mach.id || mach.temp_id;
-                        const machineNozzles = draftNozzles.filter(n => (mach.id && n.machine_id === mach.id) || (mach.temp_id && n.machine_temp_id === mach.temp_id));
-
-                        return (
-                          <div
-                            key={machKey}
-                            className="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm relative animate-fadeIn"
-                          >
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                              <input
-                                type="text"
-                                value={mach.name}
-                                onChange={(e) => handleRenameMachine(mach, e.target.value)}
-                                className="text-sm font-extrabold text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-grow bg-slate-50 focus:bg-white focus:outline-emerald-500 w-full"
+                            return (
+                              <div
+                                key={`line-${tank.id}`}
+                                className={`w-4/5 h-2.5 rounded-full transition-all duration-500 ${isActive
+                                  ? `${colors.bg} scale-y-150 shadow-lg ring-1 ring-white/50 animate-pulse`
+                                  : `${colors.bg} opacity-20 hover:opacity-40`
+                                  }`}
+                                title={`${tank.name} Pipeline (${tank.product_name})`}
                               />
+                            );
+                          })}
+                        </div>
+                      </div>
 
-                              <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
-                                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-500 cursor-pointer select-none shrink-0 border border-slate-200 rounded-lg px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 transition-colors shadow-sm">
-                                  <input
-                                    type="checkbox"
-                                    checked={mach.is_active !== false}
-                                    onChange={() => handleToggleMachineActive(machKey, mach.is_active !== false)}
-                                    className="accent-emerald-600 cursor-pointer"
-                                  />
-                                  <span>Active</span>
-                                </label>
+                      {/* 3. Forecourt Dispensers & Nozzles (Right) */}
+                      <div className="lg:col-span-5 space-y-6 flex flex-col justify-center">
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
+                          Dispenser Units
+                        </span>
 
-                                <button
-                                  onClick={() => handleDeleteMachine(mach)}
-                                  className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
-                                  title="Delete Dispenser"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
+                        {machines.map((mach) => {
+                          const machineNozzles = nozzles.filter(n => n.machine_id === mach.id);
 
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-                              {machineNozzles.map((nozzle) => {
-                                const nozzleKey = nozzle.id || nozzle.temp_id;
-                                const colors = getProductColor(nozzle.product_name || '');
-                                const isHighlighted = isNozzleHighlighted(nozzle);
+                          return (
+                            <div
+                              key={mach.id}
+                              className={`p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm transition-all duration-300 ${mach.is_active === false ? 'opacity-50 grayscale bg-slate-50 border-slate-200 shadow-none' : ''}`}
+                            >
+                              <h4 className="text-sm font-extrabold text-slate-800 mb-4 flex items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5">
+                                  <div className={`w-2.5 h-2.5 rounded-full ${mach.is_active === false ? 'bg-slate-300' : 'bg-emerald-500 shadow-sm shadow-emerald-500/25'}`} />
+                                  {mach.name}
+                                </div>
+                                {mach.is_active === false && (
+                                  <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-550 border border-slate-200 uppercase tracking-wider shrink-0 select-none">
+                                    Inactive Dispenser
+                                  </span>
+                                )}
+                              </h4>
 
-                                return (
-                                  <div
-                                    key={nozzleKey}
-                                    onMouseEnter={() => setHoveredNozzleId(nozzleKey)}
-                                    onMouseLeave={() => setHoveredNozzleId(null)}
-                                    className={`p-4 rounded-xl border transition-all duration-300 select-none ${isHighlighted
-                                      ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
-                                      : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
-                                      } ${nozzle.is_active === false ? 'opacity-65 bg-slate-105/50 border-slate-200' : ''}`}
-                                  >
-                                    <div className="space-y-3">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <input
-                                          type="text"
-                                          value={nozzle.name}
-                                          onChange={(e) => handleRenameNozzle(nozzleKey, e.target.value)}
-                                          className="text-xs font-bold text-slate-700 border border-slate-200 rounded px-2 py-1 w-full bg-white focus:outline-emerald-500"
-                                          placeholder="Nozzle Label"
-                                          disabled={nozzle.is_active === false}
-                                        />
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {machineNozzles.map((nozzle) => {
+                                  const colors = getProductColor(nozzle.product_name || '');
+                                  const isHighlighted = isNozzleHighlighted(nozzle);
 
-                                        <input
-                                          type="checkbox"
-                                          checked={nozzle.is_active !== false}
-                                          onChange={() => handleToggleNozzleActive(nozzleKey, nozzle.is_active !== false)}
-                                          className="accent-emerald-600 cursor-pointer shrink-0 w-3.5 h-3.5"
-                                          title="Toggle Nozzle Active Status"
-                                        />
-
-                                        <button
-                                          onClick={() => handleDeleteNozzle(nozzleKey)}
-                                          className="text-slate-400 hover:text-rose-650 transition-colors cursor-pointer shrink-0"
-                                          title="Delete Nozzle"
-                                        >
-                                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                          </svg>
-                                        </button>
+                                  return (
+                                    <div
+                                      key={nozzle.id}
+                                      onMouseEnter={() => setHoveredNozzleId(nozzle.id)}
+                                      onMouseLeave={() => setHoveredNozzleId(null)}
+                                      className={`p-3.5 rounded-xl border transition-all duration-300 select-none ${isHighlighted
+                                        ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
+                                        : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
+                                        } ${nozzle.is_active === false ? 'opacity-50 grayscale bg-slate-100/50 cursor-not-allowed border-slate-200' : ''}`}
+                                    >
+                                      <div className="flex justify-between items-start">
+                                        <span className="text-xs font-bold text-slate-700">{nozzle.name}</span>
+                                        {nozzle.is_active === false ? (
+                                          <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-450 border border-slate-200 select-none font-sans">
+                                            Inactive
+                                          </span>
+                                        ) : (
+                                          <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded ${colors.text} ${colors.lightBg} border ${colors.border}`}>
+                                            {nozzle.product_name || 'Fuel'}
+                                          </span>
+                                        )}
                                       </div>
 
-                                      {nozzle.is_active !== false ? (
-                                        <>
-                                          <div className="space-y-1">
-                                            <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Tank Source</label>
-                                            <SmartDropdown
-                                              value={nozzle.tank_id?.toString() || ''}
-                                              onChange={(val) => handleReconnectNozzle(nozzleKey, val)}
-                                              placeholder="-- Disconnected --"
-                                              options={[
-                                                { value: '', label: '-- Disconnected --' },
-                                                ...draftTanks.map(t => ({
-                                                  value: (t.id || t.temp_id).toString(),
-                                                  label: `${t.name} (${t.product_name})`,
-                                                }))
-                                              ]}
-                                              className="!rounded-lg !py-1.5"
-                                            />
-                                          </div>
-
-                                          <div className="space-y-1">
-                                            <label className="text-[9px] font-extrabold text-slate-455 uppercase tracking-wide block">Base Meter Reading</label>
-                                            <input
-                                              type="number"
-                                              value={nozzle.opening_reading || 0}
-                                              onChange={(e) => handleNozzleReadingChange(nozzleKey, parseFloat(e.target.value) || 0)}
-                                              className="w-full text-xs border border-slate-200 rounded p-1.5 focus:outline-emerald-500"
-                                              min="0"
-                                              placeholder="Last shift closing reading"
-                                            />
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <div className="text-[10px] text-slate-400 italic text-center py-2.5 font-bold bg-slate-100 rounded-lg border border-slate-200">
-                                          Inactive Nozzle
+                                      {nozzle.is_active !== false && (
+                                        <div className="mt-3 flex items-center justify-between text-[10px] text-slate-455">
+                                          <span className="font-extrabold text-slate-800">₹{parseFloat(nozzle.product_price as any || 0).toFixed(2)}/L</span>
                                         </div>
                                       )}
                                     </div>
-                                  </div>
-                                );
-                              })}
+                                  );
+                                })}
+                              </div>
                             </div>
+                          );
+                        })}
+                      </div>
 
-                            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-center">
-                              <button
-                                onClick={() => handleAddNewNozzle(mach)}
-                                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                                </svg>
-                                Add Nozzle
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Station Accounts Management Card */}
+            {pump && !isEditing && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm mt-8 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 mb-6 gap-4">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 font-display">Station Accounts</h3>
+                    <p className="text-xs text-slate-450 mt-0.5">
+                      Manage bank, cash, and wallet accounts for this station.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 self-end sm:self-auto">
+                    <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('TILL_DATE')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'TILL_DATE' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Till Date
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('CURRENT_MONTH')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'CURRENT_MONTH' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Current Month
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceFilter('LAST_MONTH')}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${balanceFilter === 'LAST_MONTH' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Last Month
+                      </button>
                     </div>
 
                     <button
-                      onClick={handleAddMachine}
-                      className="w-full py-4 rounded-2xl border-2 border-dashed border-slate-250 hover:border-emerald-500 hover:bg-emerald-50/20 text-slate-500 hover:text-emerald-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                      onClick={() => {
+                        setIsPaytmLinked(false);
+                        setIsAccountModalOpen(true);
+                      }}
+                      className="py-2.5 px-4 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                     >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      Add Dispenser Unit
+                      <span>+ Add Account</span>
                     </button>
                   </div>
-
                 </div>
-              ) : (
-                /* 3-column map layout when viewing */
-                <div className={`grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch relative min-h-[480px] transition-all duration-300 ${pump?.is_active === false ? 'opacity-65 grayscale-[40%] pointer-events-none' : ''
-                  }`}>
 
-                  {/* 1. Storage Tanks Section (Left) */}
-                  <div className="lg:col-span-4 space-y-6 flex flex-col justify-center">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Underground Tanks
-                    </span>
-
-                    {tanks.map((tank) => {
-                      const productColors = getProductColor(tank.product_name || '');
-                      const fillPercent = Math.min(100, Math.max(0, (tank.actual_dip_volume / tank.max_capacity) * 100));
-                      const isHighlighted = isTankHighlighted(tank.id);
-                      const varianceVal = parseFloat(tank.variance as any) || 0;
-
-                      return (
-                        <div
-                          key={tank.id}
-                          onMouseEnter={() => setHoveredTankId(tank.id)}
-                          onMouseLeave={() => setHoveredTankId(null)}
-                          className={`group relative p-5 rounded-2xl bg-white border transition-all duration-300 select-none ${isHighlighted
-                            ? `${productColors.border} ring-2 ring-inset ${productColors.ringColor} shadow-md`
-                            : `${productColors.inactiveBorder} hover:border-slate-350 shadow-sm`
-                            }`}
-                        >
-                          <div className="flex justify-between items-start gap-3">
-                            <div>
-                              <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">{tank.name}</h4>
-                              <span className={`inline-block text-[9px] font-extrabold mt-1 px-2 py-0.5 rounded border ${productColors.text} ${productColors.lightBg} ${productColors.border}`}>
-                                {tank.product_name}
-                              </span>
-                            </div>
-
-                            {varianceVal !== 0 && (
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${varianceVal > 0
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-250'
-                                : 'bg-rose-50 text-rose-700 border-rose-250'
-                                }`}>
-                                {varianceVal > 0 ? `+${varianceVal.toFixed(1)} L` : `${varianceVal.toFixed(1)} L`}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {pumpAccounts.map((acc: any) => (
+                    <div
+                      key={acc.id}
+                      className="p-5 rounded-2xl bg-slate-50 border border-slate-200/80 shadow-xs flex flex-col justify-between gap-4 animate-scaleIn"
+                    >
+                      <div>
+                        <div className="flex justify-between items-start">
+                          <h4 className="text-sm font-extrabold text-slate-800 font-display">{acc.name}</h4>
+                          <div className="flex gap-1.5 items-center">
+                            {acc.is_paytm_linked && (
+                              <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 uppercase tracking-wider animate-fadeIn">
+                                Paytm Linked
                               </span>
                             )}
                           </div>
-
-                          {/* Cylindrical Tank Meter */}
-                          <div className="mt-4 space-y-1.5">
-                            <div className="flex justify-between text-[10px] font-bold text-slate-400">
-                              <span>Level</span>
-                              <span>{fillPercent.toFixed(1)}% Filled</span>
-                            </div>
-
-                            <div className="h-6 w-full rounded-lg bg-slate-100 border border-slate-200 overflow-hidden relative shadow-inner">
-                              <div
-                                className={`absolute top-0 bottom-0 left-0 rounded-r-md transition-all duration-700 ${productColors.bg}`}
-                                style={{ width: `${fillPercent}%` }}
-                              />
-                              <div className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-slate-700 mix-blend-difference tracking-wider font-sans">
-                                {parseFloat(tank.actual_dip_volume as any).toLocaleString()} / {parseFloat(tank.max_capacity as any).toLocaleString()} Ltrs
-                              </div>
-                            </div>
-                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {balanceFilter === 'TILL_DATE'
+                            ? 'Current running balance'
+                            : balanceFilter === 'CURRENT_MONTH'
+                              ? 'Earned this month (1st - today)'
+                              : 'Earned last month (full month)'}
+                        </p>
+                      </div>
 
-                  {/* 2. Interactive Flow Pipeline Column (Middle) */}
-                  <div className="hidden lg:col-span-3 lg:flex flex-col justify-around items-center py-10 relative select-none">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2 w-full text-center">
-                      Supply Lines
-                    </span>
-
-                    <div className="flex flex-col gap-6 justify-center items-center w-full flex-grow">
-                      {tanks.map((tank) => {
-                        const isTankHovered = hoveredTankId === tank.id;
-                        const isNozzleConnecting = hoveredNozzleId !== null && nozzles.find(n => n.id === hoveredNozzleId)?.tank_id === tank.id;
-                        const isActive = isTankHovered || isNozzleConnecting;
-                        const colors = getProductColor(tank.product_name || '');
-
-                        return (
-                          <div
-                            key={`line-${tank.id}`}
-                            className={`w-4/5 h-2.5 rounded-full transition-all duration-500 ${isActive
-                              ? `${colors.bg} scale-y-150 shadow-lg ring-1 ring-white/50 animate-pulse`
-                              : `${colors.bg} opacity-20 hover:opacity-40`
-                              }`}
-                            title={`${tank.name} Pipeline (${tank.product_name})`}
-                          />
-                        );
-                      })}
+                      <div className="flex justify-between items-end">
+                        <span className="text-lg font-black text-slate-900 font-display">
+                          ₹{parseFloat(
+                            (balanceFilter === 'TILL_DATE'
+                              ? acc.balance
+                              : balanceFilter === 'CURRENT_MONTH'
+                                ? acc.current_month_balance
+                                : acc.last_month_balance) || '0'
+                          ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                        {!acc.is_constant && (
+                          <button
+                            onClick={() => handleInitiateDeleteAccount(acc)}
+                            className="text-rose-600 hover:text-rose-700 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-
-                  {/* 3. Forecourt Dispensers & Nozzles (Right) */}
-                  <div className="lg:col-span-5 space-y-6 flex flex-col justify-center">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block border-b border-slate-100 pb-2">
-                      Dispenser Units
-                    </span>
-
-                    {machines.map((mach) => {
-                      const machineNozzles = nozzles.filter(n => n.machine_id === mach.id);
-
-                      return (
-                        <div
-                          key={mach.id}
-                          className={`p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm transition-all duration-300 ${mach.is_active === false ? 'opacity-50 grayscale bg-slate-50 border-slate-200 shadow-none' : ''}`}
-                        >
-                          <h4 className="text-sm font-extrabold text-slate-800 mb-4 flex items-center justify-between gap-1.5">
-                            <div className="flex items-center gap-1.5">
-                              <div className={`w-2.5 h-2.5 rounded-full ${mach.is_active === false ? 'bg-slate-300' : 'bg-emerald-500 shadow-sm shadow-emerald-500/25'}`} />
-                              {mach.name}
-                            </div>
-                            {mach.is_active === false && (
-                              <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-550 border border-slate-200 uppercase tracking-wider shrink-0 select-none">
-                                Inactive Dispenser
-                              </span>
-                            )}
-                          </h4>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {machineNozzles.map((nozzle) => {
-                              const colors = getProductColor(nozzle.product_name || '');
-                              const isHighlighted = isNozzleHighlighted(nozzle);
-
-                              return (
-                                <div
-                                  key={nozzle.id}
-                                  onMouseEnter={() => setHoveredNozzleId(nozzle.id)}
-                                  onMouseLeave={() => setHoveredNozzleId(null)}
-                                  className={`p-3.5 rounded-xl border transition-all duration-300 select-none ${isHighlighted
-                                    ? `${colors.border} ${colors.lightBg} ring-2 ring-inset ${colors.ringColor} shadow-sm`
-                                    : 'border-slate-150 bg-slate-50 hover:bg-white hover:border-slate-300'
-                                    } ${nozzle.is_active === false ? 'opacity-50 grayscale bg-slate-100/50 cursor-not-allowed border-slate-200' : ''}`}
-                                >
-                                  <div className="flex justify-between items-start">
-                                    <span className="text-xs font-bold text-slate-700">{nozzle.name}</span>
-                                    {nozzle.is_active === false ? (
-                                      <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-450 border border-slate-200 select-none font-sans">
-                                        Inactive
-                                      </span>
-                                    ) : (
-                                      <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded ${colors.text} ${colors.lightBg} border ${colors.border}`}>
-                                        {nozzle.product_name || 'Fuel'}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {nozzle.is_active !== false && (
-                                    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-455">
-                                      <span className="font-extrabold text-slate-800">₹{parseFloat(nozzle.product_price as any || 0).toFixed(2)}/L</span>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
+                  ))}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 
@@ -1640,10 +2046,390 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
         </div>
       )}
 
+      {/* Station Account Modal */}
+      {isAccountModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display">Add Station Account</h3>
+              <p className="text-xs text-slate-500 mt-1">Configure cash/bank details for station collections</p>
+            </div>
+
+            <form onSubmit={handleCreateAccount} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-550 uppercase tracking-wider">Account Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. HDFC Bank, SBI Account, Cash Chest"
+                  value={newAccountName}
+                  onChange={(e) => setNewAccountName(e.target.value)}
+                  className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-xs"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  id="linkPaytmCheckbox"
+                  type="checkbox"
+                  checked={isPaytmLinked}
+                  onChange={(e) => handlePaytmCheckboxChange(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <label htmlFor="linkPaytmCheckbox" className="text-xs font-bold text-slate-700 cursor-pointer select-none">
+                  Link Paytm Collections (Paytm 1, 2, 3)
+                </label>
+              </div>
+
+              {accountError && <p className="text-xs text-rose-600 font-semibold">{accountError}</p>}
+
+              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAccountModalOpen(false)}
+                  className="py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-550 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingAccount}
+                  className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-150 disabled:text-slate-400 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  {isCreatingAccount && (
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  )}
+                  <span>Create Account</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Paytm Override Warning Modal */}
+      {showPaytmWarning && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2 text-amber-600">
+                <span>⚠️ Override Paytm Link</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-2">
+                Paytm collections are already linked to the account <strong className="text-slate-800">"{existingPaytmAccountName}"</strong>.
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Toggling this on will redirect all future Paytm collections to this new account and unlink <strong className="text-slate-800">"{existingPaytmAccountName}"</strong>.
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaytmLinked(false);
+                  setShowPaytmWarning(false);
+                }}
+                className="py-2 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-550 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaytmLinked(true);
+                  setShowPaytmWarning(false);
+                }}
+                className="py-2 px-3.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+              >
+                Proceed & Override
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Warning Modal */}
+      {isDeleteAccountOpen && deletingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2 text-rose-600">
+                <span>⚠️ Warning: Delete Account</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">This action cannot be undone</p>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Are you sure you want to delete the account <strong className="text-slate-800 font-bold">"{deletingAccount.name}"</strong>?
+              </p>
+
+              <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-3">
+                <p className="text-xs text-rose-750 font-bold">
+                  ⚠️ Deletion Warning
+                </p>
+                <p className="text-xs text-rose-650 leading-normal">
+                  Any remaining balance of <strong className="font-extrabold text-rose-700">₹{parseFloat(deletingAccount.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> will be permanently removed from this station.
+                </p>
+              </div>
+            </div>
+
+            {deleteAccountError && <p className="text-xs text-rose-600 font-semibold">{deleteAccountError}</p>}
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDeleteAccountOpen(false)}
+                disabled={isDeletingAccount}
+                className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteAccount}
+                disabled={isDeletingAccount}
+                className="py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                {isDeletingAccount && (
+                  <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                )}
+                <span>Delete Account</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-200 py-6 text-center text-xs text-slate-500 bg-slate-100/50 w-full shrink-0">
         <p>© 2026 PumpKhata Digital Ledger System. All rights reserved.</p>
       </footer>
+      {/* Report Generation Modal */}
+      {isReportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[95vw] sm:max-w-md max-h-[90vh] flex flex-col animate-slideUp">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0 rounded-t-2xl">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Generate Report</h2>
+                <p className="text-xs text-slate-500 mt-1">Select date range based on actual closed logs</p>
+              </div>
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-2 hover:bg-slate-200 rounded-full cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-6 overflow-y-auto">
+              {isFetchingBoundaries ? (
+                <div className="text-sm font-semibold text-slate-500 animate-pulse text-center py-8">
+                  Loading available dates...
+                </div>
+              ) : !reportMinDate ? (
+                <div className="text-sm font-semibold text-rose-600 text-center py-8">
+                  No valid closed logs found for this station. Cannot generate report.
+                </div>
+              ) : (
+                reportStep === 1 ? (
+                  <div className="flex flex-col gap-5 items-center justify-center">
+                    <div className="w-full max-w-sm shrink-0">
+                      <DateRangeCalendar
+                        minDate={reportMinDate}
+                        maxDate={reportMaxDate}
+                        startDate={reportStartDate}
+                        endDate={reportEndDate}
+                        onChange={(start, end) => {
+                          setReportStartDate(start);
+                          setReportEndDate(end);
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-4 w-full self-stretch justify-center items-center">
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 w-full max-w-sm text-center flex flex-col gap-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Selected Range</p>
+                        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm font-semibold text-slate-700">
+                          <span className="whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-100">{reportStartDate ? formatLocalDateStr(reportStartDate) : 'Start Date'}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-100">{reportEndDate ? formatLocalDateStr(reportEndDate) : 'End Date'}</span>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-medium text-center px-2">
+                        Available data spans from <br /> <b>{reportMinDate}</b> to <b>{reportMaxDate}</b>.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-sm mx-auto">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1 items-center mb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Generating Report For</p>
+                      <p className="text-xs font-semibold text-emerald-900">{formatLocalDateStr(reportStartDate)} → {formatLocalDateStr(reportEndDate)}</p>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Product Margins</h3>
+                      <div className="flex flex-col gap-3">
+                        {products.filter(p => Array.from(new Set(tanks.map(t => t.product_id))).includes(p.id)).map(product => (
+                          <div key={product.id} className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">{product.name} Margin (₹)</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={reportMargins[product.id] ?? ''}
+                              onChange={(e) => setReportMargins(prev => ({ ...prev, [product.id]: e.target.value }))}
+                              className="w-24 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Expenditures</h3>
+                      <div className="flex flex-col gap-3">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Bank Expenditures (₹)</span>
+                          <input
+                            type="text"
+                            value={reportBankExpenditure}
+                            onChange={(e) => setReportBankExpenditure(e.target.value)}
+                            onBlur={(e) => setReportBankExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportBankExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">IOCL Expenditures (₹)</span>
+                          <input
+                            type="text"
+                            value={reportIoclExpenditure}
+                            onChange={(e) => setReportIoclExpenditure(e.target.value)}
+                            onBlur={(e) => setReportIoclExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportIoclExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Salaries (₹)</span>
+                          <input
+                            type="text"
+                            value={reportSalaryExpenditure}
+                            onChange={(e) => setReportSalaryExpenditure(e.target.value)}
+                            onBlur={(e) => setReportSalaryExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportSalaryExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Misc Expenditure (₹)</span>
+                          <input
+                            type="text"
+                            value={reportMiscExpenditure}
+                            onChange={(e) => setReportMiscExpenditure(e.target.value)}
+                            onBlur={(e) => setReportMiscExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportMiscExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 shrink-0 rounded-b-2xl">
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 transition-all shadow-sm cursor-pointer mr-auto"
+              >
+                Cancel
+              </button>
+              {reportStep === 1 ? (
+                <button
+                  disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
+                  onClick={() => setReportStep(2)}
+                  className="px-6 py-2.5 rounded-xl font-bold text-sm text-white bg-slate-800 hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md cursor-pointer"
+                >
+                  Next →
+                </button>
+              ) : (
+                <>
+                  <button
+                    disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
+                    onClick={async () => {
+                      setIsReportModalOpen(false);
+                      setIsGeneratingReport(true);
+                      setReportDownloadMessage('Generating and downloading your report...');
+
+                      try {
+                        const payload = {
+                          start_date: reportStartDate,
+                          end_date: reportEndDate,
+                          margins: reportMargins,
+                          bank_expenditure: parseFloat(reportBankExpenditure) || 0,
+                          iocl_expenditure: parseFloat(reportIoclExpenditure) || 0,
+                          salary_expenditure: parseFloat(reportSalaryExpenditure) || 0,
+                          misc_expenditure: parseFloat(reportMiscExpenditure) || 0
+                        };
+
+                        const blob = await apiService.generateReport(pumpId, payload);
+
+                        // Create a temporary link to trigger download
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = `PumpKhata_Reports_${reportStartDate}_to_${reportEndDate}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+
+                        window.URL.revokeObjectURL(url);
+                        document.body.removeChild(a);
+
+                        setReportDownloadMessage('Report downloaded successfully!');
+                        setTimeout(() => {
+                          setIsGeneratingReport(false);
+                          setReportDownloadMessage('');
+                        }, 3000);
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to generate report');
+                        setIsGeneratingReport(false);
+                        setReportDownloadMessage('');
+                      }
+                    }}
+                    className="px-6 py-2.5 rounded-xl font-bold text-sm text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md cursor-pointer flex items-center gap-2"
+                  >
+                    Generate Report
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Downloading Toast */}
+      {isGeneratingReport && (
+        <div className="fixed bottom-6 right-6 z-50 animate-slideUp">
+          <div className="bg-slate-800 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <p className="text-sm font-semibold">{reportDownloadMessage}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

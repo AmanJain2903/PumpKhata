@@ -8,7 +8,8 @@ from app.database import get_db
 from app.models.machine import Machine, Nozzle
 from app.models.fuel_pump import FuelPump
 from app.models.tank import Tank
-from app.models.log import DailyNozzleLog
+from app.models.log import DailyNozzleLog, DailyLogSession, DailyLogSessionStatus
+from decimal import Decimal
 from app.schemas.machine import (
     MachineCreate,
     MachineUpdate,
@@ -182,24 +183,62 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
     if not nozzle:
         raise HTTPException(status_code=404, detail="Nozzle not found")
 
-    target_date = payload.log_date or datetime.now(IST).date()
+    pump_id = nozzle.machine.pump_id
+    target_date = DailyLogSession.get_next_valid_date(db, pump_id)
 
-    # Check if a log already exists for this date
+    # Find or create a log session for the pump on that target date
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.log_date == target_date
+    ).first()
+
+    if not session:
+        # Get opening cash balance from last created session
+        last_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.log_date < target_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
+        pump = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
+        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else (pump.opening_cash_balance if pump else Decimal("0.0")))
+
+        session_status = DailyLogSessionStatus.CLOSED if target_date < datetime.now(IST).date() else DailyLogSessionStatus.OPEN
+
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
+        session = DailyLogSession(
+            pump_id=pump_id,
+            log_date=target_date,
+            status=session_status,
+            opened_at=datetime.now(IST),
+            opening_cash_balance=opening_cash,
+            is_initialization=is_first
+        )
+        db.add(session)
+        db.flush()
+
+    # Check if a log already exists for this date and session
     existing_log = db.query(DailyNozzleLog).filter(
         DailyNozzleLog.nozzle_id == nozzle_id,
-        DailyNozzleLog.log_date == target_date
+        DailyNozzleLog.log_date == target_date,
+        DailyNozzleLog.session_id == session.id
     ).first()
+
+    price = nozzle.tank.product.current_price if (nozzle.tank and nozzle.tank.product) else Decimal("0.00")
 
     if existing_log:
         existing_log.opening_reading = payload.opening_reading
         existing_log.closing_reading = payload.opening_reading
         existing_log.gross_liters_sold = 0
+        existing_log.product_price = price
         db.commit()
         db.refresh(existing_log)
         return {"status": "updated", "id": existing_log.id}
     else:
         new_log = DailyNozzleLog(
+            session_id=session.id,
             nozzle_id=nozzle_id,
+            entry_index=0,
+            product_price=price,
             log_date=target_date,
             log_timestamp=datetime.now(IST),
             opening_reading=payload.opening_reading,

@@ -1,10 +1,12 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
+from decimal import Decimal
 
 class FuelPumpBase(BaseModel):
     name: str
     location: Optional[str] = None
     is_active: bool = True
+    opening_cash_balance: Decimal = Decimal('0.00')
 
 class FuelPumpCreate(FuelPumpBase):
     pass
@@ -13,6 +15,7 @@ class FuelPumpUpdate(BaseModel):
     name: Optional[str] = None
     location: Optional[str] = None
     is_active: Optional[bool] = None
+    opening_cash_balance: Optional[Decimal] = None
 
 class FuelPumpResponse(FuelPumpBase):
     id: int

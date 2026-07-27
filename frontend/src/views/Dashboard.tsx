@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import type { FuelPump, Product } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { SmartDropdown } from '../components/SmartDropdown';
+import { NavBar } from '../components/NavBar';
 import { ManageProducts } from './ManageProducts';
 import { ManageCreditAccounts } from './ManageCreditAccounts';
 
 interface DashboardProps {
   onSelectPump: (pumpId: number) => void;
   onLogout: () => void;
+  onManageUsers?: () => void;
 }
 
 // Temporary types for client-side wizard state
@@ -45,7 +48,8 @@ interface SubmitProgressState {
   text: string;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout, onManageUsers }) => {
+  const { user } = useAuth();
   const [subView, setSubView] = useState<'home' | 'manage-products' | 'manage-credit-accounts'>('home');
   const [pumps, setPumps] = useState<FuelPump[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -62,6 +66,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
   // Step 1: Pump basics
   const [newPumpName, setNewPumpName] = useState('');
   const [newPumpLocation, setNewPumpLocation] = useState('');
+  const [newPumpOpeningCashBalance, setNewPumpOpeningCashBalance] = useState('0');
 
   // Step 2: Tanks list
   const [tanksList, setTanksList] = useState<TankInput[]>([
@@ -190,6 +195,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setWizardStep(1);
     setNewPumpName('');
     setNewPumpLocation('');
+    setNewPumpOpeningCashBalance('0');
     setTanksList([{ tempId: 't-1', name: 'Tank 1', maxCapacity: '20000', actualDipVolume: '10000', productId: '' }]);
     setMachinesList([
       {
@@ -294,26 +300,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
   // Machines / Nozzles actions
   const handleAddMachine = () => {
     setFormError('');
-    const nextIndex = machinesList.length + 1;
-    setMachinesList(prev => [
-      ...prev,
-      {
-        tempId: `m-${Date.now()}`,
-        name: `Dispenser ${nextIndex}`,
-        nozzles: [{ tempId: `n-${Date.now()}`, name: 'Nozzle 1', tankTempId: '', openingReading: '0' }]
-      }
-    ]);
+    setMachinesList(prev => {
+      const nextList = [
+        ...prev,
+        {
+          tempId: `m-${Date.now()}`,
+          name: '',
+          nozzles: [{ tempId: `n-${Date.now()}`, name: 'Nozzle 1', tankTempId: '', openingReading: '0' }]
+        }
+      ];
+      return nextList.map((m, idx) => ({
+        ...m,
+        name: `Dispenser ${idx + 1}`
+      }));
+    });
   };
 
   const handleRemoveMachine = (tempId: string) => {
     setFormError('');
     if (machinesList.length <= 1) return;
-    setMachinesList(prev => prev.filter(m => m.tempId !== tempId));
-  };
-
-  const updateMachineName = (tempId: string, name: string) => {
-    setFormError(''); // Clear error dynamically
-    setMachinesList(prev => prev.map(m => (m.tempId === tempId ? { ...m, name } : m)));
+    setMachinesList(prev => {
+      const filtered = prev.filter(m => m.tempId !== tempId);
+      return filtered.map((m, idx) => ({
+        ...m,
+        name: `Dispenser ${idx + 1}`
+      }));
+    });
   };
 
   const handleAddNozzle = (machTempId: string) => {
@@ -321,13 +333,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setMachinesList(prev =>
       prev.map(m => {
         if (m.tempId !== machTempId) return m;
-        const nextIndex = m.nozzles.length + 1;
+        const newNozzles = [
+          ...m.nozzles,
+          { tempId: `n-${Date.now()}`, name: '', tankTempId: '', openingReading: '0' }
+        ];
         return {
           ...m,
-          nozzles: [
-            ...m.nozzles,
-            { tempId: `n-${Date.now()}`, name: `Nozzle ${nextIndex}`, tankTempId: '', openingReading: '0' }
-          ]
+          nozzles: newNozzles.map((n, idx) => ({
+            ...n,
+            name: `Nozzle ${idx + 1}`
+          }))
         };
       })
     );
@@ -339,9 +354,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
       prev.map(m => {
         if (m.tempId !== machTempId) return m;
         if (m.nozzles.length <= 1) return m;
+        const filtered = m.nozzles.filter(n => n.tempId !== nozzleTempId);
         return {
           ...m,
-          nozzles: m.nozzles.filter(n => n.tempId !== nozzleTempId)
+          nozzles: filtered.map((n, idx) => ({
+            ...n,
+            name: `Nozzle ${idx + 1}`
+          }))
         };
       })
     );
@@ -373,6 +392,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     }
     if (!newPumpLocation.trim()) {
       setFormError('Station location/address is required');
+      return false;
+    }
+    const bal = parseFloat(newPumpOpeningCashBalance);
+    if (isNaN(bal) || bal < 0) {
+      setFormError('Initial cash balance must be a non-negative number');
       return false;
     }
     setFormError('');
@@ -470,10 +494,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
     setIsSubmitting(true);
     setFormError('');
 
+    // Calculate yesterday's date string in IST timezone to initialize base settings in a previous day session
+    const now = new Date();
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const yesterdayIst = new Date(utcTime + (5.5 * 3600000) - (24 * 3600000));
+    const yyyy = yesterdayIst.getFullYear();
+    const mm = String(yesterdayIst.getMonth() + 1).padStart(2, '0');
+    const dd = String(yesterdayIst.getDate()).padStart(2, '0');
+    const yesterdayStr = `${yyyy}-${mm}-${dd}`;
+
     try {
       // 1. Create Pump
       setSubmitProgress({ step: 1, text: 'Registering Station Profile...' });
-      const createdPump = await apiService.createPump(newPumpName, newPumpLocation);
+      const createdPump = await apiService.createPump(newPumpName, newPumpLocation, parseFloat(newPumpOpeningCashBalance) || 0);
       const newPumpId = createdPump.id;
 
       // 2. Create products registered inline
@@ -507,7 +540,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
           resolvedProductId,
           tankInput.name,
           capacity,
-          dipVolume
+          dipVolume,
+          yesterdayStr
         );
         tankTempIdToDbId[tankInput.tempId] = createdTank.id;
       }
@@ -535,7 +569,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
             text: `Seeding Base Meter Reading for ${createdMachine.name} — ${nozzleInput.name}...`
           });
           const readingValue = parseFloat(nozzleInput.openingReading) || 0;
-          await apiService.initializeNozzleReading(createdNozzle.id, readingValue);
+          await apiService.initializeNozzleReading(createdNozzle.id, readingValue, yesterdayStr);
         }
       }
 
@@ -569,36 +603,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
       <div className="absolute top-0 right-1/4 w-[500px] h-[550px] bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Main Navigation Bar - High Contrast Light Theme */}
-      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div
-              onClick={() => setSubView('home')}
-              className="flex items-center gap-3 cursor-pointer select-none"
-            >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-400 to-emerald-400 via-emerald-600 flex items-center justify-center shadow-md shadow-emerald-500/10">
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 6a2 2 0 012-2h6a2 2 0 012 2v14H5V6zm3 3h4v3H8V9zm8 2h1.5a1.5 1.5 0 011.5 1.5v3.75c0 .966.534 1.75 1.25 1.75s1.25-.784 1.25-1.75V6M3 20h14" />
-                </svg>
-              </div>
-              <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-emerald-400 via-emerald-600 bg-clip-text text-transparent font-display">
-                PumpKhata
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onLogout}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors border border-slate-200 hover:border-slate-300 bg-white px-3 py-1.5 rounded-xl shadow-sm cursor-pointer"
-              >
-                Log Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>      {/* Main Content Area */}
-      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10 w-full">
+      {/* Main Navigation Bar */}
+      <NavBar
+        onLogoClick={() => setSubView('home')}
+        onLogout={onLogout}
+        onManageUsers={onManageUsers}
+      />      {/* Main Content Area */}
+      <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">
 
         {subView === 'home' && (
           <>
@@ -696,8 +707,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                     key={pump.id}
                     onClick={() => onSelectPump(pump.id)}
                     className={`group relative rounded-3xl bg-white border p-6 shadow-md hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col justify-between ${pump.is_active === false
-                        ? 'border-slate-200 opacity-60 bg-slate-50/50 hover:border-slate-300'
-                        : 'border-slate-200/80 hover:border-slate-300 hover:bg-slate-55'
+                      ? 'border-slate-200 opacity-60 bg-slate-50/50 hover:border-slate-300'
+                      : 'border-slate-200/80 hover:border-slate-300 hover:bg-slate-55'
                       }`}
                   >
                     {/* Visual accent glow */}
@@ -708,8 +719,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                     <div>
                       <div className="flex items-center justify-between gap-4">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[10px] font-bold ${pump.is_active === false
-                            ? 'bg-slate-250 text-slate-600 border border-slate-300'
-                            : 'bg-emerald-500/10 text-emerald-700 border border-emerald-500/20'
+                          ? 'bg-slate-250 text-slate-600 border border-slate-300'
+                          : 'bg-emerald-500/10 text-emerald-700 border border-emerald-500/20'
                           }`}>
                           Station #{index + 1}
                         </span>
@@ -719,7 +730,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             Inactive
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1 text-[10px] text-emerald-650 font-bold uppercase tracking-wider">
+                          <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold uppercase tracking-wider">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                             Active
                           </span>
@@ -727,8 +738,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                       </div>
 
                       <h3 className={`text-lg font-bold mt-4 font-display transition-colors ${pump.is_active === false
-                          ? 'text-slate-500 group-hover:text-slate-700'
-                          : 'text-slate-900 group-hover:text-emerald-600'
+                        ? 'text-slate-500 group-hover:text-slate-700'
+                        : 'text-slate-900 group-hover:text-emerald-600'
                         }`}>
                         {pump.name}
                       </h3>
@@ -791,22 +802,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                   className="group p-5 rounded-2xl bg-white border border-slate-200 hover:border-slate-350 hover:bg-slate-50/50 shadow-sm hover:shadow transition-all duration-300 cursor-pointer flex items-center justify-between"
                 >
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 group-hover:border-slate-300 flex items-center justify-center text-slate-500 group-hover:text-emerald-650 transition-all shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 group-hover:border-slate-300 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 transition-all shrink-0">
                       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.25}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M3 6a2 2 0 012-2h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm0 4h18m-14 5h3m4 0h4" />
                       </svg>
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-800 group-hover:text-emerald-655 transition-colors">Manage Credit Accounts</h4>
+                      <h4 className="text-sm font-bold text-slate-800 group-hover:text-emerald-600 transition-colors">Manage Credit Accounts</h4>
                       <p className="text-[10px] text-slate-500 mt-0.5">Track customer credit outstanding and logs</p>
                     </div>
                   </div>
-                  <div className="text-slate-400 group-hover:text-emerald-655 transition-colors">
+                  <div className="text-slate-400 group-hover:text-emerald-600 transition-colors">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                     </svg>
                   </div>
                 </div>
+
+
 
               </div>
             </div>
@@ -910,6 +923,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                         placeholder="e.g. Sector-14 Bypass, Delhi road"
                         value={newPumpLocation}
                         onChange={(e) => { setNewPumpLocation(e.target.value); setFormError(''); }}
+                        className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-sm font-sans"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Initial Cash Book Balance (₹)</label>
+                      <input
+                        type="number"
+                        placeholder="0.00"
+                        min="0"
+                        step="any"
+                        value={newPumpOpeningCashBalance}
+                        onChange={(e) => { setNewPumpOpeningCashBalance(e.target.value); setFormError(''); }}
                         className="mt-2 block w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none transition-all text-sm font-sans"
                       />
                     </div>
@@ -1103,12 +1129,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             <span className="text-xs font-bold text-slate-700 bg-slate-200/50 px-2 py-0.5 rounded-md font-display">
                               Dispenser #{index + 1}
                             </span>
-                            <input
-                              type="text"
-                              value={mach.name}
-                              onChange={(e) => updateMachineName(mach.tempId, e.target.value)}
-                              className="block bg-transparent border-b border-dashed border-slate-300 focus:border-emerald-500 focus:outline-none text-xs font-bold text-slate-800 py-0.5 px-1 max-w-[150px]"
-                            />
                           </div>
                           {machinesList.length > 1 && (
                             <button
@@ -1137,12 +1157,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                             <div key={nozzle.tempId} className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end bg-white p-3 border border-slate-200 rounded-xl animate-fadeIn">
                               <div>
                                 <label className="text-[9px] font-bold text-slate-400 uppercase">Nozzle Name</label>
-                                <input
-                                  type="text"
-                                  value={nozzle.name}
-                                  onChange={(e) => updateNozzleField(mach.tempId, nozzle.tempId, 'name', e.target.value)}
-                                  className="mt-1 block w-full rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800"
-                                />
+                                <div className="mt-2 text-xs font-bold text-slate-800 pl-1">
+                                  {nozzle.name}
+                                </div>
                               </div>
 
                               <div>

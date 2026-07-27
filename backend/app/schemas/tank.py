@@ -10,8 +10,10 @@ class TankBase(BaseModel):
     actual_dip_volume: Decimal
     variance: Decimal
 
+from datetime import date
+
 class TankCreate(TankBase):
-    pass
+    log_date: Optional[date] = None
 
 class TankUpdate(BaseModel):
     pump_id: Optional[int] = None

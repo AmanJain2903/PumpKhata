@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.tank import Tank
 from app.models.fuel_pump import FuelPump
 from app.models.product import Product
-from app.models.log import DailyTankLog
+from app.models.log import DailyTankLog, DailyLogSession, DailyLogSessionStatus
 from app.schemas.tank import TankCreate, TankUpdate, TankResponse
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -45,13 +45,48 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
         variance=tank.variance
     )
     db.add(db_tank)
+    if product not in pump.products:
+        pump.products.append(product)
     db.flush()
 
     # Create starting DailyTankLog entry
     now = datetime.now(IST)
+    target_date = DailyLogSession.get_next_valid_date(db, tank.pump_id)
+
+    # Find or create a log session for the pump on that target date
+    session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == tank.pump_id,
+        DailyLogSession.log_date == target_date
+    ).first()
+
+    if not session:
+        # Get opening cash balance from last created session
+        last_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == tank.pump_id,
+            DailyLogSession.log_date < target_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
+        pump = db.query(FuelPump).filter(FuelPump.id == tank.pump_id).first()
+        opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else (pump.opening_cash_balance if pump else Decimal("0.0")))
+
+        session_status = DailyLogSessionStatus.CLOSED if target_date < now.date() else DailyLogSessionStatus.OPEN
+
+        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == tank.pump_id).first() is None
+        session = DailyLogSession(
+            pump_id=tank.pump_id,
+            log_date=target_date,
+            status=session_status,
+            opened_at=now,
+            opening_cash_balance=opening_cash,
+            is_initialization=is_first
+        )
+        db.add(session)
+        db.flush()
+
     start_log = DailyTankLog(
+        session_id=session.id,
         tank_id=db_tank.id,
-        log_date=now.date(),
+        log_date=target_date,
         log_timestamp=now,
         testing_liters=Decimal('0.00'),
         fuel_received=Decimal('0.00'),
@@ -88,6 +123,11 @@ def update_tank(tank_id: int, tank_update: TankUpdate, db: Session = Depends(get
         product = db.query(Product).filter(Product.id == update_data["product_id"]).first()
         if not product:
             raise HTTPException(status_code=400, detail="Specified Product not found")
+        
+        # Auto-associate product with the station
+        pump = db_tank.pump
+        if product not in pump.products:
+            pump.products.append(product)
 
     for key, value in update_data.items():
         setattr(db_tank, key, value)

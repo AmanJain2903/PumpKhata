@@ -11,6 +11,15 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://aman@localhost:5432/pumpk
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+from sqlalchemy import event
+
+@event.listens_for(engine, "connect")
+def set_timezone(dbapi_connection, connection_record):
+    if engine.dialect.name == 'postgresql':
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET TIME ZONE 'Asia/Kolkata';")
+        cursor.close()
+
 def get_db():
     db = SessionLocal()
     try:

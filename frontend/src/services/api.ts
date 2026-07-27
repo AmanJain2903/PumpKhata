@@ -1,5 +1,26 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const token = localStorage.getItem('pumpkhata_token');
+  const headers = new Headers(options.headers || {});
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent(new Event('auth_error'));
+  }
+  return response;
+}
+
+export interface User {
+  id: number;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  role: 'admin' | 'super_admin';
+  is_active: boolean;
+}
 export interface FuelPump {
   id: number;
   name: string;
@@ -30,6 +51,7 @@ export interface Nozzle {
   id: number;
   machine_id: number;
   tank_id: number;
+  product_id?: number;
   name: string;
   is_active: boolean;
   tank_name?: string;
@@ -59,6 +81,7 @@ export interface CreditTransaction {
   log_timestamp: string;
   type: 'CHARGE' | 'PAYMENT';
   amount: number;
+  payment_method?: 'CASH' | 'ACCOUNT_TRANSFER';
   notes: string | null;
 }
 
@@ -69,6 +92,10 @@ export interface PumpConfigResponse {
   nozzles: Nozzle[];
   products: Product[];
   credit_accounts: CreditAccount[];
+  pump_accounts: any[];
+  yesterday_paytm1: number;
+  yesterday_paytm2: number;
+  has_logs?: boolean;
 }
 
 export const apiService = {
@@ -76,7 +103,7 @@ export const apiService = {
    * List all fuel pumps.
    */
   async getPumps(): Promise<FuelPump[]> {
-    const response = await fetch(`${API_BASE_URL}/pumps`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps`);
     if (!response.ok) {
       throw new Error(`Failed to fetch pumps: ${response.statusText}`);
     }
@@ -86,11 +113,11 @@ export const apiService = {
   /**
    * Create a new fuel pump.
    */
-  async createPump(name: string, location: string): Promise<FuelPump> {
-    const response = await fetch(`${API_BASE_URL}/pumps`, {
+  async createPump(name: string, location: string, openingCashBalance: number = 0): Promise<FuelPump> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, location, is_active: true }),
+      body: JSON.stringify({ name, location, is_active: true, opening_cash_balance: openingCashBalance }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -103,7 +130,7 @@ export const apiService = {
    * Update properties of an existing pump (e.g. name, location, is_active)
    */
   async updatePump(pumpId: number, data: { name?: string; location?: string; is_active?: boolean }): Promise<FuelPump> {
-    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -119,7 +146,7 @@ export const apiService = {
    * Delete a fuel pump permanently.
    */
   async deletePump(pumpId: number): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}`, {
       method: 'DELETE',
     });
     if (!response.ok) {
@@ -132,7 +159,7 @@ export const apiService = {
    * Fetch nested configurations for a specific pump.
    */
   async getPumpConfig(pumpId: number): Promise<PumpConfigResponse> {
-    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/config`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}/config`);
     if (!response.ok) {
       throw new Error(`Failed to fetch pump configuration: ${response.statusText}`);
     }
@@ -143,7 +170,7 @@ export const apiService = {
    * Submit shift log operations.
    */
   async submitShiftLog(pumpId: number, data: any): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/operations/submit/${pumpId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/submit/${pumpId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -159,7 +186,7 @@ export const apiService = {
    * Save layout configuration atomically.
    */
   async updatePumpConfig(pumpId: number, data: { tanks: any[]; machines: any[] }): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/config`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -179,7 +206,7 @@ export const apiService = {
    * List all products.
    */
   async getProducts(): Promise<Product[]> {
-    const response = await fetch(`${API_BASE_URL}/products`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/products`);
     if (!response.ok) {
       throw new Error(`Failed to fetch products: ${response.statusText}`);
     }
@@ -190,7 +217,7 @@ export const apiService = {
    * Create a new product.
    */
   async createProduct(name: string, price: number, margin: number, pumpIds: number[]): Promise<Product> {
-    const response = await fetch(`${API_BASE_URL}/products`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -210,8 +237,8 @@ export const apiService = {
   /**
    * Create a new tank for a pump.
    */
-  async createTank(pumpId: number, productId: number, name: string, maxCapacity: number, actualDipVolume: number): Promise<Tank> {
-    const response = await fetch(`${API_BASE_URL}/tanks`, {
+  async createTank(pumpId: number, productId: number, name: string, maxCapacity: number, actualDipVolume: number, logDate?: string): Promise<Tank> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/tanks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -220,7 +247,8 @@ export const apiService = {
         name,
         max_capacity: maxCapacity,
         actual_dip_volume: actualDipVolume,
-        variance: 0
+        variance: 0,
+        log_date: logDate || null
       }),
     });
     if (!response.ok) {
@@ -234,7 +262,7 @@ export const apiService = {
    * Create a new machine dispenser unit.
    */
   async createMachine(pumpId: number, name: string, numberOfNozzles: number): Promise<Machine> {
-    const response = await fetch(`${API_BASE_URL}/machines`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/machines`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -255,7 +283,7 @@ export const apiService = {
    * Create a new nozzle dispenser.
    */
   async createNozzle(machineId: number, tankId: number, name: string): Promise<Nozzle> {
-    const response = await fetch(`${API_BASE_URL}/nozzles`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/nozzles`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -276,7 +304,7 @@ export const apiService = {
    * Initialize a starting meter reading for a nozzle.
    */
   async initializeNozzleReading(nozzleId: number, openingReading: number, logDate?: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/nozzles/${nozzleId}/initialize`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/nozzles/${nozzleId}/initialize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -295,7 +323,7 @@ export const apiService = {
    * Update a product's name or pump associations.
    */
   async updateProduct(productId: number, name: string, pumpIds: number[]): Promise<Product> {
-    const response = await fetch(`${API_BASE_URL}/products/${productId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/products/${productId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, pump_ids: pumpIds }),
@@ -311,7 +339,7 @@ export const apiService = {
    * Update dynamic selling price & cost margin for a product.
    */
   async updateProductPrice(productId: number, price: number, margin: number): Promise<Product> {
-    const response = await fetch(`${API_BASE_URL}/products/${productId}/price`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/products/${productId}/price`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ selling_price: price, cost_margin: margin }),
@@ -327,7 +355,7 @@ export const apiService = {
    * Fetch the full pricing history of a product.
    */
   async getProductPriceHistory(productId: number): Promise<any[]> {
-    const response = await fetch(`${API_BASE_URL}/products/${productId}/price-history`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/products/${productId}/price-history`);
     if (!response.ok) {
       throw new Error(`Failed to fetch product price history: ${response.statusText}`);
     }
@@ -338,7 +366,7 @@ export const apiService = {
    * Check if a product is linked to any pump or tank in the database.
    */
   async getProductUsage(productId: number): Promise<{ in_use: boolean; tanks_count: number; pumps_count: number }> {
-    const response = await fetch(`${API_BASE_URL}/products/${productId}/usage`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/products/${productId}/usage`);
     if (!response.ok) {
       throw new Error(`Failed to fetch product usage: ${response.statusText}`);
     }
@@ -349,7 +377,7 @@ export const apiService = {
    * Delete a product.
    */
   async deleteProduct(productId: number): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/products/${productId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/products/${productId}`, {
       method: 'DELETE'
     });
     if (!response.ok) {
@@ -367,7 +395,7 @@ export const apiService = {
     const url = pumpId != null
       ? `${API_BASE_URL}/credit/accounts?pump_id=${pumpId}`
       : `${API_BASE_URL}/credit/accounts`;
-    const response = await fetch(url);
+    const response = await fetchWithAuth(url);
     if (!response.ok) {
       throw new Error(`Failed to fetch credit accounts: ${response.statusText}`);
     }
@@ -378,7 +406,7 @@ export const apiService = {
    * Create a new B2B credit account.
    */
   async createCreditAccount(data: { pump_id: number; account_name: string; current_outstanding_balance: number }): Promise<CreditAccount> {
-    const response = await fetch(`${API_BASE_URL}/credit/accounts`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/credit/accounts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -394,7 +422,7 @@ export const apiService = {
    * Update a credit account (rename).
    */
   async updateCreditAccount(accountId: number, data: { account_name?: string }): Promise<CreditAccount> {
-    const response = await fetch(`${API_BASE_URL}/credit/accounts/${accountId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/credit/accounts/${accountId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -410,7 +438,7 @@ export const apiService = {
    * Delete a credit account (only if balance is zero).
    */
   async deleteCreditAccount(accountId: number): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/credit/accounts/${accountId}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/credit/accounts/${accountId}`, {
       method: 'DELETE',
     });
     if (!response.ok) {
@@ -423,7 +451,7 @@ export const apiService = {
    * List transaction history for a credit account.
    */
   async getCreditTransactions(accountId: number): Promise<CreditTransaction[]> {
-    const response = await fetch(`${API_BASE_URL}/credit/accounts/${accountId}/transactions`);
+    const response = await fetchWithAuth(`${API_BASE_URL}/credit/accounts/${accountId}/transactions`);
     if (!response.ok) {
       throw new Error(`Failed to fetch transactions: ${response.statusText}`);
     }
@@ -435,9 +463,9 @@ export const apiService = {
    */
   async recordCreditTransaction(
     accountId: number,
-    data: { account_id: number; log_date: string; log_timestamp: string; type: 'CHARGE' | 'PAYMENT'; amount: number; notes?: string }
+    data: { account_id: number; log_date: string; log_timestamp: string; type: 'CHARGE' | 'PAYMENT'; amount: number; payment_method?: 'CASH' | 'ACCOUNT_TRANSFER'; notes?: string }
   ): Promise<CreditTransaction> {
-    const response = await fetch(`${API_BASE_URL}/credit/accounts/${accountId}/transactions`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}/credit/accounts/${accountId}/transactions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -448,5 +476,350 @@ export const apiService = {
     }
     return await response.json();
   },
-};
 
+  // ==================== Daily Log Sessions ====================
+
+  /**
+   * Get or create a daily log session.
+   */
+  async getOrCreateSession(pumpId: number, dateStr?: string): Promise<any> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/session/${pumpId}?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/session/${pumpId}`;
+    const response = await fetchWithAuth(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to retrieve session: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Get today's session summary status.
+   */
+  async getSessionSummary(pumpId: number, dateStr?: string): Promise<any> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/session/${pumpId}/summary?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/session/${pumpId}/summary`;
+    const response = await fetchWithAuth(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch session summary: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Reopen a closed session.
+   */
+  async reopenSession(sessionId: number): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/reopen`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to re-open session: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save all nozzle readings.
+   */
+  async saveNozzleReadings(sessionId: number, readings: any[]): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/nozzle-readings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readings),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save nozzle readings: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save all tank dip readings.
+   */
+  async saveTankReadings(sessionId: number, readings: any[]): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/tank-readings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readings),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save tank readings: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Add a single credit charge transaction.
+   */
+  async addCreditCharge(sessionId: number, accountId: number, amount: number, notes?: string): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/credit-charge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId, amount, notes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to add credit sale: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete a credit charge transaction.
+   */
+  async deleteCreditCharge(sessionId: number, txId: number): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/credit-charge/${txId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete credit sale: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Add a single credit payment transaction.
+   */
+  async addCreditPayment(sessionId: number, accountId: number, amount: number, paymentMethod?: string, notes?: string): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/credit-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId, amount, payment_method: paymentMethod || 'CASH', notes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to record payment received: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete a credit payment transaction.
+   */
+  async deleteCreditPayment(sessionId: number, txId: number): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/credit-payment/${txId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete payment transaction: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Save miscellaneous income (Other Items).
+   */
+  async saveMiscIncome(sessionId: number, miscCash: number, miscNotes?: string): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/misc`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ misc_cash: miscCash, misc_notes: miscNotes }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save other items income: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Close log session.
+   */
+  async closeSession(
+    sessionId: number,
+    fuelCollections: { payment_method: string; amount: number }[],
+    cashDeposits?: { account_id: number; amount: number }[],
+    priorPeriodAdjustment?: number,
+    adjustmentNotes?: string
+  ): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/session/${sessionId}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fuel_collections: fuelCollections,
+        cash_deposits: cashDeposits,
+        prior_period_adjustment: priorPeriodAdjustment || 0,
+        adjustment_notes: adjustmentNotes || null
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to finalize daily session close: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Get log status for all pumps.
+   */
+  async getBulkLogStatus(dateStr?: string): Promise<Record<number, string>> {
+    const url = dateStr
+      ? `${API_BASE_URL}/operations/log-status?date_str=${dateStr}`
+      : `${API_BASE_URL}/operations/log-status`;
+    const response = await fetchWithAuth(url);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch bulk log status: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Fetch prefill data for shift logs (opening readings, dip volumes, rates).
+   */
+  async prefillShiftLog(pumpId: number): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/operations/prefill/${pumpId}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch prefill details: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Fetch list of accounts for a specific pump.
+   */
+  async getPumpAccounts(pumpId: number): Promise<any[]> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}/accounts`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch station accounts: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Create a new custom account for a specific pump.
+   */
+  async createPumpAccount(pumpId: number, name: string, isPaytmLinked: boolean = false): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, is_paytm_linked: isPaytmLinked }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create station account: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  async deletePumpAccount(pumpId: number, accountId: number): Promise<any> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/pumps/${pumpId}/accounts/${accountId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete station account: ${response.statusText}`);
+    }
+    return true;
+  },
+
+  /**
+   * Fetch custom report date boundaries for a given pump.
+   */
+  async getReportBoundaries(pumpId: number): Promise<{ min_date: string | null; max_date: string | null }> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/reports/boundaries/${pumpId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch report boundaries: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Generate and download reports.
+   */
+  async generateReport(pumpId: number, data: any): Promise<Blob> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/reports/generate/${pumpId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to generate report: ${response.statusText}`);
+    }
+    return await response.blob();
+  },
+
+  /**
+   * Google Auth login
+   */
+  async loginWithGoogle(credential: string): Promise<{ access_token: string }> {
+    const response = await fetch(`${API_BASE_URL}/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Login failed: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * List users
+   */
+  async getUsers(): Promise<User[]> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/users`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch users: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Create user
+   */
+  async createUser(email: string, role: 'admin' | 'super_admin'): Promise<User> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create user: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Update user
+   */
+  async updateUser(userId: number, data: { role?: 'admin' | 'super_admin'; is_active?: boolean }): Promise<User> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/users/${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to update user: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Delete user
+   */
+  async deleteUser(userId: number): Promise<void> {
+    const response = await fetchWithAuth(`${API_BASE_URL}/users/${userId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete user: ${response.statusText}`);
+    }
+  },
+};
