@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/api';
 import type { FuelPump, Tank, Machine, Nozzle, Product, CreditAccount } from '../services/api';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { NavBar } from '../components/NavBar';
 import { SmartDropdown } from '../components/SmartDropdown';
 import { DailyLogWorkspace } from './DailyLogWorkspace';
 import { DateRangeCalendar } from '../components/DateRangeCalendar';
@@ -12,9 +14,12 @@ interface ManageStationProps {
   pumpId: number;
   onBack: () => void;
   onLogout: () => void;
+  onManageUsers?: () => void;
 }
 
-export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, onLogout }) => {
+export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, onLogout, onManageUsers }) => {
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<'daily' | 'meter_testing' | 'tanks' | 'reports' | 'statements'>('daily');
   const [pump, setPump] = useState<FuelPump | null>(null);
   const [tanks, setTanks] = useState<Tank[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -939,34 +944,11 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
       {/* Sticky Top Navigation Bar */}
-      <nav className="fixed top-0 left-0 right-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div
-              onClick={onBack}
-              className="flex items-center gap-3 cursor-pointer select-none"
-            >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-400 to-emerald-400 via-emerald-600 flex items-center justify-center shadow-md shadow-emerald-500/10">
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 6a2 2 0 012-2h6a2 2 0 012 2v14H5V6zm3 3h4v3H8V9zm8 2h1.5a1.5 1.5 0 011.5 1.5v3.75c0 .966.534 1.75 1.25 1.75s1.25-.784 1.25-1.75V6M3 20h14" />
-                </svg>
-              </div>
-              <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-emerald-400 via-emerald-600 bg-clip-text text-transparent font-display">
-                PumpKhata
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onLogout}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors border border-slate-200 hover:border-slate-300 bg-white px-3 py-1.5 rounded-xl shadow-sm cursor-pointer"
-              >
-                Log Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <NavBar
+        onLogoClick={onBack}
+        onLogout={onLogout}
+        onManageUsers={onManageUsers}
+      />
 
       {/* Main Content Workspace Container */}
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">

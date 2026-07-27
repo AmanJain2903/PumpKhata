@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Login } from './views/Login';
+import Login from './views/Login';
 import { Dashboard } from './views/Dashboard';
 import { ManageStation } from './views/ManageStation';
+import UserManagement from './views/UserManagement';
+import { useAuth } from './context/AuthContext';
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { isAuthenticated, user, logout } = useAuth();
   const [selectedPumpId, setSelectedPumpId] = useState<number | null>(null);
+  const [viewingUsers, setViewingUsers] = useState(false);
 
   useEffect(() => {
     const forceScrollToTop = () => {
@@ -23,10 +26,22 @@ function App() {
       }, 150);
     };
     forceScrollToTop();
-  }, [selectedPumpId, isLoggedIn]);
+  }, [selectedPumpId, isAuthenticated, viewingUsers]);
 
-  if (!isLoggedIn) {
-    return <Login onLoginSuccess={() => setIsLoggedIn(true)} />;
+  if (!isAuthenticated) {
+    return <Login />;
+  }
+
+  if (viewingUsers && user?.role === 'super_admin') {
+    return (
+      <UserManagement 
+        onBack={() => {
+          setViewingUsers(false);
+          setSelectedPumpId(null);
+        }} 
+        onLogout={logout} 
+      />
+    );
   }
 
   if (selectedPumpId !== null) {
@@ -35,9 +50,10 @@ function App() {
         pumpId={selectedPumpId}
         onBack={() => setSelectedPumpId(null)}
         onLogout={() => {
-          setIsLoggedIn(false);
+          logout();
           setSelectedPumpId(null);
         }}
+        onManageUsers={user?.role === 'super_admin' ? () => setViewingUsers(true) : undefined}
       />
     );
   }
@@ -45,9 +61,8 @@ function App() {
   return (
     <Dashboard
       onSelectPump={setSelectedPumpId}
-      onLogout={() => {
-        setIsLoggedIn(false);
-      }}
+      onLogout={logout}
+      onManageUsers={user?.role === 'super_admin' ? () => setViewingUsers(true) : undefined}
     />
   );
 }

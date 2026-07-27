@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import type { FuelPump, Product } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { SmartDropdown } from '../components/SmartDropdown';
+import { NavBar } from '../components/NavBar';
 import { ManageProducts } from './ManageProducts';
 import { ManageCreditAccounts } from './ManageCreditAccounts';
 
 interface DashboardProps {
   onSelectPump: (pumpId: number) => void;
   onLogout: () => void;
+  onManageUsers?: () => void;
 }
 
 // Temporary types for client-side wizard state
@@ -45,7 +48,8 @@ interface SubmitProgressState {
   text: string;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout, onManageUsers }) => {
+  const { user } = useAuth();
   const [subView, setSubView] = useState<'home' | 'manage-products' | 'manage-credit-accounts'>('home');
   const [pumps, setPumps] = useState<FuelPump[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -599,35 +603,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
       <div className="absolute top-0 right-1/4 w-[500px] h-[550px] bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Main Navigation Bar - High Contrast Light Theme */}
-      <nav className="fixed top-0 left-0 right-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div
-              onClick={() => setSubView('home')}
-              className="flex items-center gap-3 cursor-pointer select-none"
-            >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-400 to-emerald-400 via-emerald-600 flex items-center justify-center shadow-md shadow-emerald-500/10">
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 6a2 2 0 012-2h6a2 2 0 012 2v14H5V6zm3 3h4v3H8V9zm8 2h1.5a1.5 1.5 0 011.5 1.5v3.75c0 .966.534 1.75 1.25 1.75s1.25-.784 1.25-1.75V6M3 20h14" />
-                </svg>
-              </div>
-              <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-emerald-400 via-emerald-600 bg-clip-text text-transparent font-display">
-                PumpKhata
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onLogout}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors border border-slate-200 hover:border-slate-300 bg-white px-3 py-1.5 rounded-xl shadow-sm cursor-pointer"
-              >
-                Log Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>      {/* Main Content Area */}
+      {/* Main Navigation Bar */}
+      <NavBar
+        onLogoClick={() => setSubView('home')}
+        onLogout={onLogout}
+        onManageUsers={onManageUsers}
+      />      {/* Main Content Area */}
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8 relative z-10 w-full">
 
         {subView === 'home' && (
@@ -837,6 +818,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout }) 
                     </svg>
                   </div>
                 </div>
+
+
 
               </div>
             </div>

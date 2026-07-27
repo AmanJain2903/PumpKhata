@@ -6,6 +6,7 @@ from app.models.machine import Machine, Nozzle
 from app.models.log import DailyNozzleLog, DailyTankLog, DailyFinancialLog, DailyLogSession, DailyLogSessionStatus, DailyLogSessionPayment
 from app.models.credit import CreditAccount, CreditTransaction, PaymentMethodType, PumpAccount, PumpAccountTransaction
 from app.models.price_change import PriceChangeGainLoss
+from app.models.user import User, UserRole
 
 __all__ = [
     "Base",
@@ -27,5 +28,7 @@ __all__ = [
     "PumpAccount",
     "PumpAccountTransaction",
     "PriceChangeGainLoss",
+    "User",
+    "UserRole",
 ]
 
