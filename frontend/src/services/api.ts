@@ -692,9 +692,6 @@ export const apiService = {
     return await response.json();
   },
 
-  /**
-   * Delete a custom account for a specific pump.
-   */
   async deletePumpAccount(pumpId: number, accountId: number): Promise<any> {
     const response = await fetch(`${API_BASE_URL}/pumps/${pumpId}/accounts/${accountId}`, {
       method: 'DELETE',
@@ -705,6 +702,31 @@ export const apiService = {
     }
     return true;
   },
+
+  /**
+   * Fetch custom report date boundaries for a given pump.
+   */
+  async getReportBoundaries(pumpId: number): Promise<{ min_date: string | null; max_date: string | null }> {
+    const response = await fetch(`${API_BASE_URL}/reports/boundaries/${pumpId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch report boundaries: ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  /**
+   * Generate and download reports.
+   */
+  async generateReport(pumpId: number, data: any): Promise<Blob> {
+    const response = await fetch(`${API_BASE_URL}/reports/generate/${pumpId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to generate report: ${response.statusText}`);
+    }
+    return await response.blob();
+  },
 };
-
-

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import type { Tank, Nozzle, CreditAccount, CreditTransaction } from '../services/api';
 import { SmartDropdown } from '../components/SmartDropdown';
+import { parseSumExpression } from '../utils/math';
 
 interface DailyLogWorkspaceProps {
   pumpId: number;
@@ -315,23 +316,6 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       return 'text-emerald-500';
     }
     return 'text-orange-500';
-  };
-
-  // Helper to parse and evaluate sum expressions like "10 20, 30"
-  const parseSumExpression = (val: string): string => {
-    if (!val) return '';
-    const parts = val.replace(/,/g, ' ').split(/\s+/);
-    let sum = 0;
-    let hasValidNumber = false;
-    for (const p of parts) {
-      if (p.trim() === '') continue;
-      const num = parseFloat(p);
-      if (!isNaN(num)) {
-        sum += num;
-        hasValidNumber = true;
-      }
-    }
-    return hasValidNumber ? String(sum) : val;
   };
 
   // Helper to calculate total nozzle dispensed liters per nozzle row

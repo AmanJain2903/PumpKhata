@@ -4,6 +4,8 @@ import type { FuelPump, Tank, Machine, Nozzle, Product, CreditAccount } from '..
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { SmartDropdown } from '../components/SmartDropdown';
 import { DailyLogWorkspace } from './DailyLogWorkspace';
+import { DateRangeCalendar } from '../components/DateRangeCalendar';
+import { parseSumExpression } from '../utils/math';
 
 
 interface ManageStationProps {
@@ -57,6 +59,24 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [draftMachines, setDraftMachines] = useState<any[]>([]);
   const [draftNozzles, setDraftNozzles] = useState<any[]>([]);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
+  // Reports states
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportStep, setReportStep] = useState<1 | 2>(1);
+  const [reportMinDate, setReportMinDate] = useState('');
+  const [reportMaxDate, setReportMaxDate] = useState('');
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [isFetchingBoundaries, setIsFetchingBoundaries] = useState(false);
+
+  // Report Financial Inputs State
+  const [reportMargins, setReportMargins] = useState<Record<number, string>>({});
+  const [reportBankExpenditure, setReportBankExpenditure] = useState('');
+  const [reportIoclExpenditure, setReportIoclExpenditure] = useState('');
+  const [reportSalaryExpenditure, setReportSalaryExpenditure] = useState('');
+  const [reportMiscExpenditure, setReportMiscExpenditure] = useState('');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportDownloadMessage, setReportDownloadMessage] = useState('');
 
   // Tank Edit Modal states
   const [editingTank, setEditingTank] = useState<any | null>(null);
@@ -153,8 +173,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     }
   }, [isLoading]);
 
-  // Lock body scroll when any modal (tank edit or delete station) is open
-  const anyModalOpen = isTankModalOpen || isDeletePumpModalOpen;
+  // Lock body scroll when any modal is open
+  const anyModalOpen = isTankModalOpen || isDeletePumpModalOpen || isReportModalOpen || isAccountModalOpen || isDeleteAccountOpen;
   useBodyScrollLock(anyModalOpen);
 
   const [activeSessionDate, setActiveSessionDate] = useState<string | null>(null);
@@ -175,6 +195,41 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       alert(err.message || 'Failed to toggle station status');
     } finally {
       setIsTogglingActive(false);
+    }
+  };
+
+  const handleOpenReportModal = async () => {
+    setIsReportModalOpen(true);
+    setReportStep(1);
+    setIsFetchingBoundaries(true);
+    setReportMinDate('');
+    setReportMaxDate('');
+    setReportStartDate('');
+    setReportEndDate('');
+
+    // Initialize margins state from products
+    const initialMargins: Record<number, string> = {};
+    products.forEach(p => {
+      initialMargins[p.id] = String(p.current_margin);
+    });
+    setReportMargins(initialMargins);
+    setReportBankExpenditure('');
+    setReportIoclExpenditure('');
+    setReportSalaryExpenditure('');
+    setReportMiscExpenditure('');
+
+    try {
+      const data = await apiService.getReportBoundaries(pumpId);
+      if (data.min_date && data.max_date) {
+        setReportMinDate(data.min_date);
+        setReportMaxDate(data.max_date);
+        setReportStartDate(data.min_date);
+        setReportEndDate(data.max_date);
+      }
+    } catch (err: any) {
+      console.error('Failed to load report boundaries', err);
+    } finally {
+      setIsFetchingBoundaries(false);
     }
   };
 
@@ -249,6 +304,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       // Sort tanks alphabetically
       const sortedTanks = [...config.tanks].sort((a, b) => a.name.localeCompare(b.name));
       setTanks(sortedTanks);
+      setProducts(config.products || []);
 
       // Sort machines alphabetically
       const sortedMachines = [...config.machines].sort((a, b) => a.name.localeCompare(b.name));
@@ -869,6 +925,12 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
 
 
+  const formatLocalDateStr = (dStr: string) => {
+    if (!dStr) return '';
+    const [y, m, d] = dStr.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans relative overflow-x-hidden">
 
@@ -1037,7 +1099,13 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
             )
           ) : (
             pump && (
-              <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                <button
+                  onClick={handleOpenReportModal}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                >
+                  <span>Generate Report</span>
+                </button>
                 {pump.is_active === false ? (
                   <button
                     onClick={handleToggleStationActive}
@@ -1099,10 +1167,10 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                       <span className="text-slate-300">•</span>
                       <span>Status:</span>
                       <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${todayLogStatus === 'CLOSED'
-                          ? 'bg-rose-50 text-rose-700 border border-rose-250'
-                          : todayLogStatus === 'OPEN'
-                            ? 'bg-amber-50 text-amber-700 border border-amber-250'
-                            : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        ? 'bg-rose-50 text-rose-700 border border-rose-250'
+                        : todayLogStatus === 'OPEN'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-250'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
                         }`}>
                         {todayLogStatus === 'CLOSED' ? 'Locked 🔴' : todayLogStatus === 'OPEN' ? 'In Progress ⚡' : 'Not Started 📝'}
                       </span>
@@ -1111,6 +1179,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
+
                   {todayLogStatus === 'CLOSED' ? (
                     <button
                       onClick={() => setActiveView('ops_log')}
@@ -2161,6 +2230,224 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
       <footer className="mt-auto border-t border-slate-200 py-6 text-center text-xs text-slate-500 bg-slate-100/50 w-full shrink-0">
         <p>© 2026 PumpKhata Digital Ledger System. All rights reserved.</p>
       </footer>
+      {/* Report Generation Modal */}
+      {isReportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[95vw] sm:max-w-md max-h-[90vh] flex flex-col animate-slideUp">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0 rounded-t-2xl">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Generate Report</h2>
+                <p className="text-xs text-slate-500 mt-1">Select date range based on actual closed logs</p>
+              </div>
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-2 hover:bg-slate-200 rounded-full cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-6 overflow-y-auto">
+              {isFetchingBoundaries ? (
+                <div className="text-sm font-semibold text-slate-500 animate-pulse text-center py-8">
+                  Loading available dates...
+                </div>
+              ) : !reportMinDate ? (
+                <div className="text-sm font-semibold text-rose-600 text-center py-8">
+                  No valid closed logs found for this station. Cannot generate report.
+                </div>
+              ) : (
+                reportStep === 1 ? (
+                  <div className="flex flex-col gap-5 items-center justify-center">
+                    <div className="w-full max-w-sm shrink-0">
+                      <DateRangeCalendar
+                        minDate={reportMinDate}
+                        maxDate={reportMaxDate}
+                        startDate={reportStartDate}
+                        endDate={reportEndDate}
+                        onChange={(start, end) => {
+                          setReportStartDate(start);
+                          setReportEndDate(end);
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-4 w-full self-stretch justify-center items-center">
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 w-full max-w-sm text-center flex flex-col gap-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Selected Range</p>
+                        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm font-semibold text-slate-700">
+                          <span className="whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-100">{reportStartDate ? formatLocalDateStr(reportStartDate) : 'Start Date'}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-100">{reportEndDate ? formatLocalDateStr(reportEndDate) : 'End Date'}</span>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-medium text-center px-2">
+                        Available data spans from <br /> <b>{reportMinDate}</b> to <b>{reportMaxDate}</b>.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-sm mx-auto">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1 items-center mb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Generating Report For</p>
+                      <p className="text-xs font-semibold text-emerald-900">{formatLocalDateStr(reportStartDate)} → {formatLocalDateStr(reportEndDate)}</p>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Product Margins</h3>
+                      <div className="flex flex-col gap-3">
+                        {products.filter(p => Array.from(new Set(tanks.map(t => t.product_id))).includes(p.id)).map(product => (
+                          <div key={product.id} className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">{product.name} Margin (₹)</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={reportMargins[product.id] ?? ''}
+                              onChange={(e) => setReportMargins(prev => ({ ...prev, [product.id]: e.target.value }))}
+                              className="w-24 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Expenditures</h3>
+                      <div className="flex flex-col gap-3">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Bank Expenditures (₹)</span>
+                          <input
+                            type="text"
+                            value={reportBankExpenditure}
+                            onChange={(e) => setReportBankExpenditure(e.target.value)}
+                            onBlur={(e) => setReportBankExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportBankExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">IOCL Expenditures (₹)</span>
+                          <input
+                            type="text"
+                            value={reportIoclExpenditure}
+                            onChange={(e) => setReportIoclExpenditure(e.target.value)}
+                            onBlur={(e) => setReportIoclExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportIoclExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Salaries (₹)</span>
+                          <input
+                            type="text"
+                            value={reportSalaryExpenditure}
+                            onChange={(e) => setReportSalaryExpenditure(e.target.value)}
+                            onBlur={(e) => setReportSalaryExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportSalaryExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-slate-600 font-medium">Misc Expenditure (₹)</span>
+                          <input
+                            type="text"
+                            value={reportMiscExpenditure}
+                            onChange={(e) => setReportMiscExpenditure(e.target.value)}
+                            onBlur={(e) => setReportMiscExpenditure(parseSumExpression(e.target.value))}
+                            onKeyDown={(e) => e.key === 'Enter' && setReportMiscExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 shrink-0 rounded-b-2xl">
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 transition-all shadow-sm cursor-pointer mr-auto"
+              >
+                Cancel
+              </button>
+              {reportStep === 1 ? (
+                <button
+                  disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
+                  onClick={() => setReportStep(2)}
+                  className="px-6 py-2.5 rounded-xl font-bold text-sm text-white bg-slate-800 hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md cursor-pointer"
+                >
+                  Next →
+                </button>
+              ) : (
+                <>
+                  <button
+                    disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
+                    onClick={async () => {
+                      setIsReportModalOpen(false);
+                      setIsGeneratingReport(true);
+                      setReportDownloadMessage('Generating and downloading your report...');
+
+                      try {
+                        const payload = {
+                          start_date: reportStartDate,
+                          end_date: reportEndDate,
+                          margins: reportMargins,
+                          bank_expenditure: parseFloat(reportBankExpenditure) || 0,
+                          iocl_expenditure: parseFloat(reportIoclExpenditure) || 0,
+                          salary_expenditure: parseFloat(reportSalaryExpenditure) || 0,
+                          misc_expenditure: parseFloat(reportMiscExpenditure) || 0
+                        };
+
+                        const blob = await apiService.generateReport(pumpId, payload);
+
+                        // Create a temporary link to trigger download
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = `PumpKhata_Reports_${reportStartDate}_to_${reportEndDate}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+
+                        window.URL.revokeObjectURL(url);
+                        document.body.removeChild(a);
+
+                        setReportDownloadMessage('Report downloaded successfully!');
+                        setTimeout(() => {
+                          setIsGeneratingReport(false);
+                          setReportDownloadMessage('');
+                        }, 3000);
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to generate report');
+                        setIsGeneratingReport(false);
+                        setReportDownloadMessage('');
+                      }
+                    }}
+                    className="px-6 py-2.5 rounded-xl font-bold text-sm text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md cursor-pointer flex items-center gap-2"
+                  >
+                    Generate Report
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Downloading Toast */}
+      {isGeneratingReport && (
+        <div className="fixed bottom-6 right-6 z-50 animate-slideUp">
+          <div className="bg-slate-800 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <p className="text-sm font-semibold">{reportDownloadMessage}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
