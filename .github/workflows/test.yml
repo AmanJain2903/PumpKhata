@@ -1,0 +1,55 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # Optional: Since the tests use an in-memory SQLite database, we don't strictly need Postgres.
+      # However, if any raw SQL queries assume Postgres dialects, we could start a service here.
+      # For now, SQLite is sufficient.
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: aman
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: pumpkhata
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        cache: "pip"
+
+    - name: Install Dependencies
+      working-directory: ./backend
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest httpx pytest-mock
+
+    - name: Run Pytest
+      working-directory: ./backend
+      env:
+        PYTHONPATH: .
+      run: |
+        pytest tests/
