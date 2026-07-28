@@ -12,18 +12,11 @@ function App() {
 
   useEffect(() => {
     const forceScrollToTop = () => {
-      document.documentElement.style.overflow = 'hidden';
-      document.body.style.overflow = 'hidden';
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
+      // Small timeout ensures the browser paints the new route before scrolling,
+      // avoiding Chrome mobile layout bugs with the address bar.
       setTimeout(() => {
-        document.documentElement.style.overflow = '';
-        document.body.style.overflow = '';
-        window.scrollTo(0, 0);
-        document.documentElement.scrollTop = 0;
-        document.body.scrollTop = 0;
-      }, 150);
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      }, 50);
     };
     forceScrollToTop();
   }, [selectedPumpId, isAuthenticated, viewingUsers]);
