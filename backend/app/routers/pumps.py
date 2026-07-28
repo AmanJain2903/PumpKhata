@@ -278,56 +278,88 @@ def update_pump_config(
     from app.models.tank import Tank
     from app.models.machine import Machine, Nozzle
     from app.models.log import DailyTankLog, DailyNozzleLog, DailyLogSession, DailyLogSessionStatus, DailyFinancialLog
-    from datetime import datetime
+    from datetime import datetime, date, timedelta
     from zoneinfo import ZoneInfo
     from decimal import Decimal
 
     IST = ZoneInfo("Asia/Kolkata")
     now = datetime.now(IST)
 
-    # Get or create today's daily log session
-    session = db.query(DailyLogSession).filter(
+    # Check if pump has any real (non-initialization) sessions
+    has_real_sessions = db.query(DailyLogSession).filter(
         DailyLogSession.pump_id == pump_id,
-        DailyLogSession.log_date == now.date()
-    ).first()
+        DailyLogSession.is_initialization == False
+    ).first() is not None
 
-    if session:
-        if session.status == DailyLogSessionStatus.CLOSED:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot update station map layout because the daily session for today ({now.date()}) is already closed. Please reopen it first."
-            )
-    else:
-        # Get opening cash balance from last created session
-        last_session = db.query(DailyLogSession).filter(
+    if has_real_sessions:
+        # Normal flow: get or create today's daily log session
+        session = db.query(DailyLogSession).filter(
             DailyLogSession.pump_id == pump_id,
-            DailyLogSession.log_date < now.date()
-        ).order_by(DailyLogSession.log_date.desc()).first()
+            DailyLogSession.log_date == now.date()
+        ).first()
 
-        pump_obj = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
-        if last_session:
-            opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else last_session.opening_cash_balance
+        if session:
+            if session.status == DailyLogSessionStatus.CLOSED:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot update station map layout because the daily session for today ({now.date()}) is already closed. Please reopen it first."
+                )
         else:
-            prev_fin_log = db.query(DailyFinancialLog).filter(
-                DailyFinancialLog.pump_id == pump_id,
-                DailyFinancialLog.log_date < now.date()
-            ).order_by(DailyFinancialLog.log_date.desc()).first()
-            opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump_obj.opening_cash_balance if pump_obj else Decimal("0.0"))
+            # Get opening cash balance from last created session
+            last_session = db.query(DailyLogSession).filter(
+                DailyLogSession.pump_id == pump_id,
+                DailyLogSession.log_date < now.date()
+            ).order_by(DailyLogSession.log_date.desc()).first()
 
-        is_first_session = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
-        session_date = DailyLogSession.get_next_valid_date(db, pump_id)
-        session = DailyLogSession(
-            pump_id=pump_id,
-            log_date=session_date,
-            status=DailyLogSessionStatus.OPEN,
-            opened_at=now,
-            opening_cash_balance=opening_cash,
-            is_initialization=is_first_session,
-            misc_cash=Decimal("0.0"),
-            misc_digital=Decimal("0.0")
-        )
-        db.add(session)
-        db.flush()
+            pump_obj = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
+            if last_session:
+                opening_cash = last_session.closing_cash_balance if last_session.closing_cash_balance is not None else last_session.opening_cash_balance
+            else:
+                prev_fin_log = db.query(DailyFinancialLog).filter(
+                    DailyFinancialLog.pump_id == pump_id,
+                    DailyFinancialLog.log_date < now.date()
+                ).order_by(DailyFinancialLog.log_date.desc()).first()
+                opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump_obj.opening_cash_balance if pump_obj else Decimal("0.0"))
+
+            session_date = DailyLogSession.get_next_valid_date(db, pump_id)
+            session = DailyLogSession(
+                pump_id=pump_id,
+                log_date=session_date,
+                status=DailyLogSessionStatus.OPEN,
+                opened_at=now,
+                opening_cash_balance=opening_cash,
+                is_initialization=False,
+                misc_cash=Decimal("0.0"),
+                misc_digital=Decimal("0.0")
+            )
+            db.add(session)
+            db.flush()
+    else:
+        # Initialization mode: find or create the init session for yesterday
+        session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.is_initialization == True
+        ).first()
+
+        if not session:
+            pump_obj = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
+            opening_cash = pump_obj.opening_cash_balance if pump_obj else Decimal("0.0")
+
+            init_date = now.date() - timedelta(days=1)
+            session = DailyLogSession(
+                pump_id=pump_id,
+                log_date=init_date,
+                status=DailyLogSessionStatus.CLOSED,
+                opened_at=now,
+                closed_at=now,
+                opening_cash_balance=opening_cash,
+                closing_cash_balance=opening_cash,
+                is_initialization=True,
+                misc_cash=Decimal("0.0"),
+                misc_digital=Decimal("0.0")
+            )
+            db.add(session)
+            db.flush()
 
     # Pre-fetch existing records to detect deletes
     existing_tanks = {t.id: t for t in pump.tanks}
@@ -367,7 +399,7 @@ def update_pump_config(
                 new_tank_log = DailyTankLog(
                     session_id=session.id,
                     tank_id=db_tank.id,
-                    log_date=now.date(),
+                    log_date=session.log_date,
                     log_timestamp=now,
                     testing_liters=Decimal('0.00'),
                     fuel_received=Decimal('0.00'),
@@ -396,7 +428,7 @@ def update_pump_config(
             start_tank_log = DailyTankLog(
                 session_id=session.id,
                 tank_id=db_tank.id,
-                log_date=now.date(),
+                log_date=session.log_date,
                 log_timestamp=now,
                 testing_liters=Decimal('0.00'),
                 fuel_received=Decimal('0.00'),
@@ -480,7 +512,7 @@ def update_pump_config(
                         session_id=session.id,
                         nozzle_id=db_nozzle.id,
                         product_price=price,
-                        log_date=now.date(),
+                        log_date=session.log_date,
                         log_timestamp=now,
                         opening_reading=new_reading,
                         closing_reading=new_reading,
@@ -506,7 +538,7 @@ def update_pump_config(
                     session_id=session.id,
                     nozzle_id=db_nozzle.id,
                     product_price=price,
-                    log_date=now.date(),
+                    log_date=session.log_date,
                     log_timestamp=now,
                     opening_reading=noz_in.opening_reading or Decimal('0.00'),
                     closing_reading=noz_in.opening_reading or Decimal('0.00'),

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.database import get_db
@@ -167,19 +167,50 @@ def record_transaction(
             opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else pump.opening_cash_balance
 
         # Create session
-        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == account.pump_id).first() is None
-        session = DailyLogSession(
-            pump_id=account.pump_id,
-            log_date=log_date,
-            status=DailyLogSessionStatus.OPEN,
-            opened_at=datetime.now(IST),
-            opening_cash_balance=opening_cash,
-            is_initialization=is_first,
-            misc_cash=Decimal("0.0"),
-            misc_digital=Decimal("0.0")
-        )
-        db.add(session)
-        db.flush() # ensure session.id is populated
+        is_first = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == account.pump_id,
+            DailyLogSession.is_initialization == False
+        ).first() is None
+        now = datetime.now(IST)
+
+        if is_first:
+            # Initialization mode: find or create init session for yesterday
+            existing_init = db.query(DailyLogSession).filter(
+                DailyLogSession.pump_id == account.pump_id,
+                DailyLogSession.is_initialization == True
+            ).first()
+
+            if existing_init:
+                session = existing_init
+            else:
+                init_date = now.date() - timedelta(days=1)
+                session = DailyLogSession(
+                    pump_id=account.pump_id,
+                    log_date=init_date,
+                    status=DailyLogSessionStatus.CLOSED,
+                    opened_at=now,
+                    closed_at=now,
+                    opening_cash_balance=opening_cash,
+                    closing_cash_balance=opening_cash,
+                    is_initialization=True,
+                    misc_cash=Decimal("0.0"),
+                    misc_digital=Decimal("0.0")
+                )
+                db.add(session)
+                db.flush()
+        else:
+            session = DailyLogSession(
+                pump_id=account.pump_id,
+                log_date=log_date,
+                status=DailyLogSessionStatus.OPEN,
+                opened_at=now,
+                opening_cash_balance=opening_cash,
+                is_initialization=False,
+                misc_cash=Decimal("0.0"),
+                misc_digital=Decimal("0.0")
+            )
+            db.add(session)
+            db.flush() # ensure session.id is populated
 
     db_tx = CreditTransaction(
         account_id=account_id,

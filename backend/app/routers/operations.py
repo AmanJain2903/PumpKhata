@@ -303,16 +303,44 @@ def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Sess
         ).order_by(DailyFinancialLog.log_date.desc()).first()
         opening_cash = prev_fin_log.closing_cash_balance if prev_fin_log else (pump.opening_cash_balance if pump else Decimal("0.0"))
 
-    is_first_session = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
+    is_first_session = db.query(DailyLogSession).filter(
+        DailyLogSession.pump_id == pump_id,
+        DailyLogSession.is_initialization == False
+    ).first() is None
+    now = datetime.now(IST)
 
-    # Create new session
+    if is_first_session:
+        # Ensure init session exists for yesterday (as a prerequisite)
+        init_exists = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.is_initialization == True
+        ).first()
+
+        if not init_exists:
+            init_date = now.date() - timedelta(days=1)
+            init_session = DailyLogSession(
+                pump_id=pump_id,
+                log_date=init_date,
+                status=DailyLogSessionStatus.CLOSED,
+                opened_at=now,
+                closed_at=now,
+                opening_cash_balance=opening_cash,
+                closing_cash_balance=opening_cash,
+                is_initialization=True,
+                misc_cash=Decimal("0.0"),
+                misc_digital=Decimal("0.0")
+            )
+            db.add(init_session)
+            db.commit()
+
+    # Create the actual session for log_date (today)
     session = DailyLogSession(
         pump_id=pump_id,
         log_date=log_date,
         status=DailyLogSessionStatus.OPEN,
-        opened_at=datetime.now(IST),
+        opened_at=now,
         opening_cash_balance=opening_cash,
-        is_initialization=is_first_session,
+        is_initialization=False,
         misc_cash=Decimal("0.0"),
         misc_digital=Decimal("0.0")
     )
@@ -1032,14 +1060,43 @@ def submit_shift_log_legacy(pump_id: int, req: ShiftSubmitRequest, db: Session =
         ).order_by(DailyLogSession.log_date.desc()).first()
         opening_cash = last_session.closing_cash_balance if (last_session and last_session.closing_cash_balance is not None) else (last_session.opening_cash_balance if last_session else pump.opening_cash_balance)
         
-        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
+        is_first = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.is_initialization == False
+        ).first() is None
+        now = datetime.now(IST)
+
+        if is_first:
+            # Initialization mode: find or create init session for yesterday
+            existing_init = db.query(DailyLogSession).filter(
+                DailyLogSession.pump_id == pump_id,
+                DailyLogSession.is_initialization == True
+            ).first()
+
+            if not existing_init:
+                init_date = now.date() - timedelta(days=1)
+                init_session = DailyLogSession(
+                    pump_id=pump_id,
+                    log_date=init_date,
+                    status=DailyLogSessionStatus.CLOSED,
+                    opened_at=now,
+                    closed_at=now,
+                    opening_cash_balance=opening_cash,
+                    closing_cash_balance=opening_cash,
+                    is_initialization=True,
+                    misc_cash=Decimal("0.0"),
+                    misc_digital=Decimal("0.0")
+                )
+                db.add(init_session)
+                db.flush()
+
         session = DailyLogSession(
             pump_id=pump_id,
             log_date=req.log_date,
             status=DailyLogSessionStatus.OPEN,
             opened_at=req.log_timestamp,
             opening_cash_balance=opening_cash,
-            is_initialization=is_first,
+            is_initialization=False,
             misc_cash=Decimal("0.0"),
             misc_digital=Decimal("0.0")
         )
