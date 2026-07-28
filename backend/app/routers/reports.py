@@ -9,6 +9,8 @@ from app.models.log import DailyLogSession, DailyLogSessionStatus
 from app.models.fuel_pump import FuelPump
 from app.schemas.report import ReportGenerateRequest
 from app.services.pdf_generator import generate_report_zip
+from app.core.security import get_current_user
+from app.models.user import User
 from fastapi.responses import StreamingResponse
 import io
 
@@ -46,7 +48,12 @@ def get_report_boundaries(pump_id: int, db: Session = Depends(get_db)):
     )
 
 @router.post("/generate/{pump_id}")
-def generate_reports(pump_id: int, request: ReportGenerateRequest, db: Session = Depends(get_db)):
+def generate_reports(
+    pump_id: int, 
+    request: ReportGenerateRequest, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     # 1. Fetch sessions
     sessions = db.query(DailyLogSession).filter(
         DailyLogSession.pump_id == pump_id,
@@ -72,13 +79,16 @@ def generate_reports(pump_id: int, request: ReportGenerateRequest, db: Session =
     }
 
     # 3. Generate ZIP buffer
+    user_name = f"{current_user.first_name} {current_user.last_name}".strip() if current_user else "System"
+    
     zip_bytes = generate_report_zip(
         pump=pump,
         sessions=sessions,
         margins=request.margins,
         exps=exps,
         start_date=request.start_date,
-        end_date=request.end_date
+        end_date=request.end_date,
+        generated_by=user_name
     )
 
     # 4. Return as StreamingResponse

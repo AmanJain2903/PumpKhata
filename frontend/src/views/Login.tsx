@@ -22,7 +22,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center relative overflow-hidden font-sans">
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col justify-center items-center relative overflow-hidden font-sans">
 
       {/* Ambient Glow Effects */}
       <div className="absolute top-[-10%] right-[-5%] w-[600px] h-[600px] bg-emerald-500/10 rounded-full blur-[100px] pointer-events-none animate-pulse" />
