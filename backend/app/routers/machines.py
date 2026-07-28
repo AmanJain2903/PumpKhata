@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.database import get_db
@@ -204,22 +204,51 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
 
         session_status = DailyLogSessionStatus.CLOSED if target_date < datetime.now(IST).date() else DailyLogSessionStatus.OPEN
 
-        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == pump_id).first() is None
-        session = DailyLogSession(
-            pump_id=pump_id,
-            log_date=target_date,
-            status=session_status,
-            opened_at=datetime.now(IST),
-            opening_cash_balance=opening_cash,
-            is_initialization=is_first
-        )
-        db.add(session)
-        db.flush()
+        is_first = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.is_initialization == False
+        ).first() is None
+
+        if is_first:
+            # Initialization mode: find or create init session for yesterday
+            existing_init = db.query(DailyLogSession).filter(
+                DailyLogSession.pump_id == pump_id,
+                DailyLogSession.is_initialization == True
+            ).first()
+
+            if existing_init:
+                session = existing_init
+            else:
+                now = datetime.now(IST)
+                init_date = now.date() - timedelta(days=1)
+                session = DailyLogSession(
+                    pump_id=pump_id,
+                    log_date=init_date,
+                    status=DailyLogSessionStatus.CLOSED,
+                    opened_at=now,
+                    closed_at=now,
+                    opening_cash_balance=opening_cash,
+                    closing_cash_balance=opening_cash,
+                    is_initialization=True
+                )
+                db.add(session)
+                db.flush()
+        else:
+            session = DailyLogSession(
+                pump_id=pump_id,
+                log_date=target_date,
+                status=session_status,
+                opened_at=datetime.now(IST),
+                opening_cash_balance=opening_cash,
+                is_initialization=False
+            )
+            db.add(session)
+            db.flush()
 
     # Check if a log already exists for this date and session
     existing_log = db.query(DailyNozzleLog).filter(
         DailyNozzleLog.nozzle_id == nozzle_id,
-        DailyNozzleLog.log_date == target_date,
+        DailyNozzleLog.log_date == session.log_date,
         DailyNozzleLog.session_id == session.id
     ).first()
 
@@ -239,7 +268,7 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
             nozzle_id=nozzle_id,
             entry_index=0,
             product_price=price,
-            log_date=target_date,
+            log_date=session.log_date,
             log_timestamp=datetime.now(IST),
             opening_reading=payload.opening_reading,
             closing_reading=payload.opening_reading,

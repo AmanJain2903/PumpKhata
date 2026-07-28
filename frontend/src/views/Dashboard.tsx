@@ -1191,7 +1191,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectPump, onLogout, on
                                   type="number"
                                   value={nozzle.openingReading}
                                   onChange={(e) => updateNozzleField(mach.tempId, nozzle.tempId, 'openingReading', e.target.value)}
-                                  className="mt-1 block w-full rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800"
+                                  className="mt-1 block w-full rounded-lg bg-white border border-slate-200 px-3 py-2 text-xs text-slate-800"
                                 />
                               </div>
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 
@@ -71,22 +71,50 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
 
         session_status = DailyLogSessionStatus.CLOSED if target_date < now.date() else DailyLogSessionStatus.OPEN
 
-        is_first = db.query(DailyLogSession).filter(DailyLogSession.pump_id == tank.pump_id).first() is None
-        session = DailyLogSession(
-            pump_id=tank.pump_id,
-            log_date=target_date,
-            status=session_status,
-            opened_at=now,
-            opening_cash_balance=opening_cash,
-            is_initialization=is_first
-        )
-        db.add(session)
-        db.flush()
+        is_first = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == tank.pump_id,
+            DailyLogSession.is_initialization == False
+        ).first() is None
+
+        if is_first:
+            # Initialization mode: find or create init session for yesterday
+            existing_init = db.query(DailyLogSession).filter(
+                DailyLogSession.pump_id == tank.pump_id,
+                DailyLogSession.is_initialization == True
+            ).first()
+
+            if existing_init:
+                session = existing_init
+            else:
+                init_date = now.date() - timedelta(days=1)
+                session = DailyLogSession(
+                    pump_id=tank.pump_id,
+                    log_date=init_date,
+                    status=DailyLogSessionStatus.CLOSED,
+                    opened_at=now,
+                    closed_at=now,
+                    opening_cash_balance=opening_cash,
+                    closing_cash_balance=opening_cash,
+                    is_initialization=True
+                )
+                db.add(session)
+                db.flush()
+        else:
+            session = DailyLogSession(
+                pump_id=tank.pump_id,
+                log_date=target_date,
+                status=session_status,
+                opened_at=now,
+                opening_cash_balance=opening_cash,
+                is_initialization=False
+            )
+            db.add(session)
+            db.flush()
 
     start_log = DailyTankLog(
         session_id=session.id,
         tank_id=db_tank.id,
-        log_date=target_date,
+        log_date=session.log_date,
         log_timestamp=now,
         testing_liters=Decimal('0.00'),
         fuel_received=Decimal('0.00'),

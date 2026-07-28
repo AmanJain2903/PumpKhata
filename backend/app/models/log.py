@@ -61,7 +61,8 @@ class DailyLogSession(Base):
         Determines the next sequential date that needs to be logged for a given pump.
         """
         last_session = db.query(cls).filter(
-            cls.pump_id == pump_id
+            cls.pump_id == pump_id,
+            cls.is_initialization == False
         ).order_by(cls.log_date.desc()).first()
 
         today = datetime.now(IST).date()
