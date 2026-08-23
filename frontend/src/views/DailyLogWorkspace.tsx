@@ -143,11 +143,11 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
   const [closeSaving, setCloseSaving] = useState(false);
   const [closeError, setCloseError] = useState('');
 
-  // Helper to compute today's date in IST timezone
+  // Helper to compute yesterday's date in IST timezone
   const getISTDateString = () => {
     const now = new Date();
     const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const istTime = new Date(utcTime + (5.5 * 3600000));
+    const istTime = new Date(utcTime + (5.5 * 3600000) - 86400000); // Subtract 1 day
 
     const yyyy = istTime.getFullYear();
     const mm = String(istTime.getMonth() + 1).padStart(2, '0');
@@ -849,7 +849,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
           <div>
             <h4 className="text-sm font-bold text-amber-800">Sequential Logging Enforced</h4>
             <p className="text-xs text-amber-700/80 mt-1 font-medium leading-relaxed">
-              You are currently logging for a past date (<span className="font-bold">{session.log_date}</span>). The system requires days to be logged sequentially until you catch up to today.
+              You are currently logging for a past date (<span className="font-bold">{session.log_date}</span>). The system requires days to be logged sequentially until you catch up to yesterday's date.
             </p>
           </div>
         </div>

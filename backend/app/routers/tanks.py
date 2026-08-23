@@ -86,7 +86,7 @@ def create_tank(tank: TankCreate, db: Session = Depends(get_db)):
             if existing_init:
                 session = existing_init
             else:
-                init_date = now.date() - timedelta(days=1)
+                init_date = now.date() - timedelta(days=2)
                 session = DailyLogSession(
                     pump_id=tank.pump_id,
                     log_date=init_date,

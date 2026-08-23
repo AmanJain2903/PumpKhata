@@ -239,3 +239,5 @@ pump-khata/
 # Documentation
 docs/
 
+# Database Backups
+.db_backups/

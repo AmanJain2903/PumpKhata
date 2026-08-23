@@ -220,7 +220,7 @@ def initialize_nozzle(nozzle_id: int, payload: NozzleInitialize, db: Session = D
                 session = existing_init
             else:
                 now = datetime.now(IST)
-                init_date = now.date() - timedelta(days=1)
+                init_date = now.date() - timedelta(days=2)
                 session = DailyLogSession(
                     pump_id=pump_id,
                     log_date=init_date,

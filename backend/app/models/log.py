@@ -66,18 +66,19 @@ class DailyLogSession(Base):
         ).order_by(cls.log_date.desc()).first()
 
         today = datetime.now(IST).date()
+        yesterday = today - timedelta(days=1)
 
         if not last_session:
-            return today
+            return yesterday
         
         if last_session.status == DailyLogSessionStatus.OPEN:
             return last_session.log_date
             
         # If the last session is CLOSED
-        if last_session.log_date >= today:
-            # All days up to today are logged and closed.
-            # We return last_session.log_date so that the UI can view/reopen today's session.
-            # We strictly DO NOT return tomorrow's date.
+        if last_session.log_date >= yesterday:
+            # All days up to yesterday are logged and closed.
+            # We return last_session.log_date so that the UI can view/reopen yesterday's session.
+            # We strictly DO NOT return today's date.
             return last_session.log_date
             
         return last_session.log_date + timedelta(days=1)

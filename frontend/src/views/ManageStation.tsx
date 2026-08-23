@@ -33,7 +33,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const getISTDateString = () => {
     const now = new Date();
     const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const istTime = new Date(utcTime + (5.5 * 3600000));
+    const istTime = new Date(utcTime + (5.5 * 3600000) - 86400000); // Subtract 1 day
 
     const yyyy = istTime.getFullYear();
     const mm = String(istTime.getMonth() + 1).padStart(2, '0');
@@ -1141,7 +1141,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                   <div>
                     <h4 className="text-sm font-extrabold text-slate-800 tracking-tight font-display">Daily Operations Ledger</h4>
                     <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
-                      <span>Today's Date:</span>
+                      <span>Logging Date:</span>
                       <span className="font-extrabold text-slate-700">{getISTDateString()}</span>
                       <span className="text-slate-300">•</span>
                       <span>Status:</span>
@@ -1164,21 +1164,21 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                       onClick={() => setActiveView('ops_log')}
                       className="px-5 py-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
                     >
-                      <span>👁️ View Today's Closed Ledger</span>
+                      <span>👁️ View Closed Ledger - {getISTDateString()}</span>
                     </button>
                   ) : todayLogStatus === 'OPEN' ? (
                     <button
                       onClick={() => setActiveView('ops_log')}
                       className="px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
                     >
-                      <span>⚡ Continue Today's Log</span>
+                      <span>⚡ Continue Log - {getISTDateString()}</span>
                     </button>
                   ) : (
                     <button
                       onClick={() => setActiveView('ops_log')}
                       className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer hover:scale-[1.01]"
                     >
-                      <span>Log Today ✍️</span>
+                      <span>Log - {getISTDateString()} ✍️</span>
                     </button>
                   )}
                 </div>

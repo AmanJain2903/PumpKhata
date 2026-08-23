@@ -183,7 +183,7 @@ def record_transaction(
             if existing_init:
                 session = existing_init
             else:
-                init_date = now.date() - timedelta(days=1)
+                init_date = now.date() - timedelta(days=2)
                 session = DailyLogSession(
                     pump_id=account.pump_id,
                     log_date=init_date,

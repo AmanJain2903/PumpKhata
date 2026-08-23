@@ -233,12 +233,11 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
   // ========== Helpers ==========
   const getPumpName = (pumpId: number) => pumps.find(p => p.id === pumpId)?.name || `Station #${pumpId}`;
 
-  const formatDateTime = (dateStr: string) => {
+  const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleString('en-IN', {
       timeZone: 'Asia/Kolkata',
-      day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', hour12: true,
+      day: '2-digit', month: 'short', year: 'numeric'
     });
   };
 
@@ -562,7 +561,7 @@ export const ManageCreditAccounts: React.FC<ManageCreditAccountsProps> = ({ onBa
                         <span className={`absolute -left-[30px] top-1.5 flex h-3 w-3 items-center justify-center rounded-full ring-4 ring-white ${isCharge ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                         <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5">
                           <div className="flex justify-between items-center text-[10px] font-bold text-slate-400">
-                            <span>{formatDateTime(tx.log_timestamp)}</span>
+                            <span>{formatDate(tx.log_date)}</span>
                             <span className={`px-2 py-0.5 rounded text-[8px] uppercase tracking-wide font-extrabold ${isCharge ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
                               {isCharge ? 'Charge' : 'Payment'}
                             </span>
