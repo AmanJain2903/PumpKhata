@@ -987,15 +987,15 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <div className="flex justify-end items-center pt-2 border-t border-slate-200/40 gap-4">
                       <div className="text-right border-r border-slate-200 pr-4">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Old Price L</span>
-                        <span className="text-xs font-bold text-amber-600">{getNozzleDispensedOld(log).toFixed(2)} L</span>
+                        <span className="text-xs font-bold text-amber-600">{getNozzleDispensedOld(log).toFixed(3)} L</span>
                       </div>
                       <div className="text-right border-r border-slate-200 pr-4">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">New Price L</span>
-                        <span className="text-xs font-bold text-emerald-600">{getNozzleDispensedNew(log).toFixed(2)} L</span>
+                        <span className="text-xs font-bold text-emerald-600">{getNozzleDispensedNew(log).toFixed(3)} L</span>
                       </div>
                       <div className="text-right">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Total Sold</span>
-                        <span className="text-xs font-extrabold text-slate-800">{getNozzleDispensed(log).toFixed(2)} L</span>
+                        <span className="text-xs font-extrabold text-slate-800">{getNozzleDispensed(log).toFixed(3)} L</span>
                       </div>
                     </div>
                   </div>
@@ -1044,7 +1044,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                     <div className="flex justify-end items-center pt-2 border-t border-slate-200/40">
                       <div className="text-right">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Liters Sold</span>
-                        <span className="text-xs font-extrabold text-emerald-600">{getNozzleDispensed(log).toFixed(2)} L</span>
+                        <span className="text-xs font-extrabold text-emerald-600">{getNozzleDispensed(log).toFixed(3)} L</span>
                       </div>
                     </div>
                   </>
@@ -1106,7 +1106,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                 <div className="flex justify-between items-start">
                   <div>
                     <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide font-display">{log.tank_name}</h4>
-                    <p className="text-[10px] text-slate-500 font-medium">{log.product_name} • Opening Dip Volume: {log.opening_dip.toFixed(2)} L</p>
+                    <p className="text-[10px] text-slate-500 font-medium">{log.product_name} • Opening Dip Volume: {log.opening_dip.toFixed(3)} L</p>
                   </div>
                 </div>
 
@@ -1161,13 +1161,13 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
                           .filter(nl => nozzlesList.find(n => n.id === nl.nozzle_id)?.tank_id === log.tank_id)
                           .reduce((sum, nl) => sum + getNozzleDispensed(nl), 0)
                         - (parseFloat(log.testing_liters) || 0)
-                      ).toFixed(2)} L
+                      ).toFixed(3)} L
                     </span>
                   </div>
                   <div className="flex flex-col items-end">
                     <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Variance</span>
                     <span className={`text-xs font-extrabold ${log.calculated_variance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {log.calculated_variance >= 0 ? '+' : ''}{log.calculated_variance.toFixed(2)} L
+                      {log.calculated_variance >= 0 ? '+' : ''}{log.calculated_variance.toFixed(3)} L
                     </span>
                   </div>
                 </div>
