@@ -130,7 +130,11 @@ export const SmartDropdown: React.FC<SmartDropdownProps> = ({
     if (!isOpen) return;
     const recalc = () => calculatePosition();
     // Close on scroll (since the trigger moves with scroll, dropdown would desync)
-    const handleScroll = () => setIsOpen(false);
+    const handleScroll = (e: Event) => {
+      // Don't close if the scroll is inside the dropdown itself
+      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      setIsOpen(false);
+    };
     window.addEventListener('scroll', handleScroll, true);
     window.addEventListener('resize', recalc);
     return () => {
