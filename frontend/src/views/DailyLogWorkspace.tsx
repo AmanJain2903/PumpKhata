@@ -241,13 +241,13 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
           machine_name: machineName,
           product_name: nz.product_name || 'Fuel',
           original_opening: baseOpening,
-          closing_reading: matchingLog ? String(matchingLog.closing_reading) : '',
+          closing_reading: matchingLog ? String(matchingLog.closing_reading) : String(baseOpening),
           // Always read price from the main product configuration
           product_price: String(prefillNz?.product_price || nz.product_price || 0),
           is_reset: matchingLog ? matchingLog.is_reset : false,
           has_price_change: hasPriceChange,
           old_price: oldPrice,
-          old_price_closing: oldPriceLog ? String(oldPriceLog.closing_reading) : ''
+          old_price_closing: oldPriceLog ? String(oldPriceLog.closing_reading) : (hasPriceChange ? String(baseOpening) : '')
         };
       });
       setNozzleLogs(initNozzleLogs);
