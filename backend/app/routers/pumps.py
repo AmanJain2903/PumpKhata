@@ -222,21 +222,21 @@ def get_pump_config(pump_id: int, db: Session = Depends(get_db)):
     from app.schemas.credit import PumpAccountResponse
     pump_accounts = [PumpAccountResponse.model_validate(a) for a in pump.pump_accounts]
 
-    # Fetch yesterday's Paytm 1 & Paytm 2 for live preview calculation
+    # Fetch last closed session's Paytm 1 & Paytm 2 for live preview calculation
     from app.models.log import DailyLogSessionPayment, DailyLogSession, DailyLogSessionStatus
-    yesterday = today_dt - timedelta(days=1)
-    yesterday_session = db.query(DailyLogSession).filter(
+    
+    last_closed_session = db.query(DailyLogSession).filter(
         DailyLogSession.pump_id == pump_id,
-        DailyLogSession.log_date == yesterday,
-        DailyLogSession.status == DailyLogSessionStatus.CLOSED
-    ).first()
+        DailyLogSession.status == DailyLogSessionStatus.CLOSED,
+        DailyLogSession.is_initialization == False
+    ).order_by(DailyLogSession.log_date.desc()).first()
 
     yesterday_paytm1 = Decimal("0.0")
     yesterday_paytm2 = Decimal("0.0")
-    if yesterday_session:
+    if last_closed_session:
         for pm_name, setter in [("Paytm 1", "yesterday_paytm1"), ("Paytm 2", "yesterday_paytm2")]:
             val = db.query(func.sum(DailyLogSessionPayment.amount)).filter(
-                DailyLogSessionPayment.session_id == yesterday_session.id,
+                DailyLogSessionPayment.session_id == last_closed_session.id,
                 DailyLogSessionPayment.payment_method == pm_name
             ).scalar()
             if setter == "yesterday_paytm1":
@@ -345,7 +345,7 @@ def update_pump_config(
             pump_obj = db.query(FuelPump).filter(FuelPump.id == pump_id).first()
             opening_cash = pump_obj.opening_cash_balance if pump_obj else Decimal("0.0")
 
-            init_date = now.date() - timedelta(days=1)
+            init_date = now.date() - timedelta(days=2)
             session = DailyLogSession(
                 pump_id=pump_id,
                 log_date=init_date,

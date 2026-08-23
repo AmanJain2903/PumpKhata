@@ -310,14 +310,14 @@ def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Sess
     now = datetime.now(IST)
 
     if is_first_session:
-        # Ensure init session exists for yesterday (as a prerequisite)
+        # Ensure init session exists for the day before yesterday (as a prerequisite)
         init_exists = db.query(DailyLogSession).filter(
             DailyLogSession.pump_id == pump_id,
             DailyLogSession.is_initialization == True
         ).first()
 
         if not init_exists:
-            init_date = now.date() - timedelta(days=1)
+            init_date = now.date() - timedelta(days=2)
             init_session = DailyLogSession(
                 pump_id=pump_id,
                 log_date=init_date,
@@ -355,7 +355,7 @@ def get_session_summary(pump_id: int, date_str: Optional[str] = None, db: Sessio
     if date_str:
         log_date = date.fromisoformat(date_str)
     else:
-        log_date = datetime.now(IST).date()
+        log_date = datetime.now(IST).date() - timedelta(days=1)
 
     session = db.query(DailyLogSession).filter(
         DailyLogSession.pump_id == pump_id,
@@ -400,14 +400,14 @@ def get_session_summary(pump_id: int, date_str: Optional[str] = None, db: Sessio
 
 @router.post("/session/{session_id}/reopen")
 def reopen_session(session_id: int, db: Session = Depends(get_db)):
-    """Re-opens a closed session. Only permitted for today's date in IST."""
+    """Re-opens a closed session. Only permitted for yesterday's date in IST."""
     session = db.query(DailyLogSession).filter(DailyLogSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    today = datetime.now(IST).date()
-    if session.log_date != today:
-        raise HTTPException(status_code=400, detail="Only today's logging session can be re-opened.")
+    yesterday = datetime.now(IST).date() - timedelta(days=1)
+    if session.log_date != yesterday:
+        raise HTTPException(status_code=400, detail="Only yesterday's logging session can be re-opened.")
 
     # Reverse ALL account ledger entries for this session (IOCL, Paytm, etc.)
     from app.models.credit import PumpAccount, PumpAccountTransaction
@@ -1020,7 +1020,7 @@ def get_bulk_log_status(date_str: Optional[str] = None, db: Session = Depends(ge
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
     else:
-        log_date = datetime.now(IST).date()
+        log_date = datetime.now(IST).date() - timedelta(days=1)
 
     active_pumps = db.query(FuelPump).filter(FuelPump.is_active == True).all()
     pumps_status = {}
@@ -1074,7 +1074,7 @@ def submit_shift_log_legacy(pump_id: int, req: ShiftSubmitRequest, db: Session =
             ).first()
 
             if not existing_init:
-                init_date = now.date() - timedelta(days=1)
+                init_date = now.date() - timedelta(days=2)
                 init_session = DailyLogSession(
                     pump_id=pump_id,
                     log_date=init_date,
