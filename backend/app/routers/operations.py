@@ -271,12 +271,29 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
 
 @router.get("/session/{pump_id}", response_model=DailyLogSessionDetailResponse)
 def get_or_create_session(pump_id: int, date_str: Optional[str] = None, db: Session = Depends(get_db)):
-    """Retrieves or creates a daily log session for the pump for the next valid sequential date."""
+    """Retrieves a requested session, or creates the next valid sequential session."""
     pump = db.query(FuelPump).filter(FuelPump.id == pump_id, FuelPump.is_active == True).first()
     if not pump:
         raise HTTPException(status_code=404, detail="Active fuel pump not found")
 
+    requested_date = None
+    if date_str:
+        try:
+            requested_date = date.fromisoformat(date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date_str must be in YYYY-MM-DD format")
+
+        # Historical/session views must load the exact requested session.
+        requested_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == pump_id,
+            DailyLogSession.log_date == requested_date
+        ).first()
+        if requested_session:
+            return requested_session
+
     log_date = DailyLogSession.get_next_valid_date(db, pump_id)
+    if requested_date == log_date:
+        log_date = requested_date
 
     session = db.query(DailyLogSession).filter(
         DailyLogSession.pump_id == pump_id,

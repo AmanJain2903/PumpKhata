@@ -484,7 +484,7 @@ export const apiService = {
    */
   async getOrCreateSession(pumpId: number, dateStr?: string): Promise<any> {
     const url = dateStr
-      ? `${API_BASE_URL}/operations/session/${pumpId}?date_str=${dateStr}`
+      ? `${API_BASE_URL}/operations/session/${pumpId}?date_str=${encodeURIComponent(dateStr)}`
       : `${API_BASE_URL}/operations/session/${pumpId}`;
     const response = await fetchWithAuth(url);
     if (!response.ok) {
@@ -676,8 +676,11 @@ export const apiService = {
   /**
    * Fetch prefill data for shift logs (opening readings, dip volumes, rates).
    */
-  async prefillShiftLog(pumpId: number): Promise<any> {
-    const response = await fetchWithAuth(`${API_BASE_URL}/operations/prefill/${pumpId}`);
+  async prefillShiftLog(pumpId: number, logDate?: string): Promise<any> {
+    const url = logDate
+      ? `${API_BASE_URL}/operations/prefill/${pumpId}?log_timestamp=${encodeURIComponent(`${logDate}T00:00:00`)}`
+      : `${API_BASE_URL}/operations/prefill/${pumpId}`;
+    const response = await fetchWithAuth(url);
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch prefill details: ${response.statusText}`);
