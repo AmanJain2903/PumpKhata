@@ -213,8 +213,10 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
         setCashDeposits({});
       }
 
-      // 3. Fetch prefill readings to get correct opening bounds
-      const prefill = await apiService.prefillShiftLog(pumpId);
+      // 3. Fetch prefill readings for this session's date. Without the date,
+      // the backend defaults to today and returns this session's closing value
+      // as its opening value when a closed session is being viewed.
+      const prefill = await apiService.prefillShiftLog(pumpId, activeSession.log_date);
 
       // Prefill Section 1: Nozzle Readings
       const activeNozzleLogs = activeSession.nozzle_logs || [];
@@ -494,7 +496,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       await apiService.saveNozzleReadings(session.id, payload);
       setNozzleSuccess('Nozzle readings saved successfully!');
 
-      const updatedSession = await apiService.getOrCreateSession(pumpId);
+      const updatedSession = await apiService.getOrCreateSession(pumpId, session.log_date);
       setSession(updatedSession);
 
       setTimeout(() => setOpenSection(2), 600);
@@ -561,7 +563,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       await apiService.saveTankReadings(session.id, payload);
       setTankSuccess('Tank dip readings saved successfully!');
 
-      const updatedSession = await apiService.getOrCreateSession(pumpId);
+      const updatedSession = await apiService.getOrCreateSession(pumpId, session.log_date);
       setSession(updatedSession);
 
       setTimeout(() => setOpenSection(3), 600);
@@ -687,7 +689,7 @@ export const DailyLogWorkspace: React.FC<DailyLogWorkspaceProps> = ({ pumpId, on
       await apiService.saveMiscIncome(session.id, cash, miscNotes.trim() || undefined);
       setMiscSuccess('Other items income saved successfully!');
 
-      const updatedSession = await apiService.getOrCreateSession(pumpId);
+      const updatedSession = await apiService.getOrCreateSession(pumpId, session.log_date);
       setSession(updatedSession);
 
       setTimeout(() => setOpenSection(6), 600);
