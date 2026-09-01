@@ -41,6 +41,53 @@ title_style = styles['Heading1']
 title_style.alignment = 1 # Center
 normal_style = styles['Normal']
 
+
+def _aggregate_product_sales(sessions: List[Any]) -> Dict[int, Dict[str, Decimal | str]]:
+    """Return per-product sales totals using net liters after testing adjustments."""
+    by_product: Dict[int, Dict[str, Decimal | str]] = {}
+
+    for s in sessions:
+        for n_log in s.nozzle_logs:
+            tank = getattr(n_log, 'nozzle', None).tank if getattr(n_log, 'nozzle', None) else None
+            prod_id = tank.product_id if tank else None
+            if prod_id is None:
+                continue
+            vol = n_log.gross_liters_sold or Decimal(0)
+            if prod_id not in by_product:
+                by_product[prod_id] = {
+                    'name': getattr(getattr(tank, 'product', None), 'name', getattr(tank, 'name', 'Product')),
+                    'vol': Decimal(0),
+                    'testing_liters': Decimal(0),
+                    'net_vol': Decimal(0),
+                    'value': Decimal(0),
+                }
+            by_product[prod_id]['vol'] += vol
+
+        for t_log in s.tank_logs:
+            tank = getattr(t_log, 'tank', None)
+            prod_id = tank.product_id if tank else None
+            if prod_id is None:
+                continue
+            testing = t_log.testing_liters or Decimal(0)
+            if prod_id not in by_product:
+                by_product[prod_id] = {
+                    'name': getattr(getattr(tank, 'product', None), 'name', getattr(tank, 'name', 'Product')),
+                    'vol': Decimal(0),
+                    'testing_liters': Decimal(0),
+                    'net_vol': Decimal(0),
+                    'value': Decimal(0),
+                }
+            by_product[prod_id]['testing_liters'] += testing
+
+    for pdata in by_product.values():
+        gross_liters = pdata['vol']
+        testing_liters = pdata['testing_liters']
+        net_liters = max(Decimal(0), gross_liters - testing_liters)
+        pdata['net_vol'] = net_liters
+
+    return by_product
+
+
 subtitle_style = ParagraphStyle(
     "SubtitleCentered",
     parent=styles['Heading2'],
@@ -240,25 +287,27 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
 
     # 1. Gross Profit Calculation
     gross_profit = Decimal('0')
-    volume_by_product = {}
+    volume_by_product = _aggregate_product_sales(sessions)
     total_sales_value = Decimal('0')
     
     # Inventory variance calculation
     variance_by_tank = {}
     
     for s in sessions:
-        # Nozzle Logs (Sales & Margins)
         for n_log in s.nozzle_logs:
             prod_id = n_log.nozzle.tank.product_id
-            vol = n_log.gross_liters_sold or Decimal(0)
-            value = vol * (n_log.product_price or Decimal(0))
+            gross_liters = n_log.gross_liters_sold or Decimal(0)
+            gross_value = gross_liters * (n_log.product_price or Decimal(0))
             if prod_id not in volume_by_product:
-                volume_by_product[prod_id] = {'name': n_log.nozzle.tank.product.name, 'vol': Decimal(0), 'value': Decimal(0)}
-            volume_by_product[prod_id]['vol'] += vol
-            volume_by_product[prod_id]['value'] += value
-            total_sales_value += value
+                volume_by_product[prod_id] = {
+                    'name': n_log.nozzle.tank.product.name,
+                    'vol': Decimal(0),
+                    'testing_liters': Decimal(0),
+                    'net_vol': Decimal(0),
+                    'value': Decimal(0),
+                }
+            volume_by_product[prod_id]['value'] = volume_by_product[prod_id].get('value', Decimal(0)) + gross_value
             
-        # Tank Logs (Variance)
         for t_log in s.tank_logs:
             t_id = t_log.tank_id
             var = t_log.calculated_variance or Decimal(0)
@@ -271,6 +320,23 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
                 }
             variance_by_tank[t_id]['var'] += var
             variance_by_tank[t_id]['days'] += 1
+
+    for pid, pdata in volume_by_product.items():
+        gross_liters = pdata.get('vol', Decimal(0))
+        testing_liters = pdata.get('testing_liters', Decimal(0))
+        net_liters = max(Decimal(0), gross_liters - testing_liters)
+        gross_sales = Decimal(0)
+        for s in sessions:
+            for n_log in s.nozzle_logs:
+                if getattr(n_log.nozzle.tank, 'product_id', None) == pid:
+                    gross_sales += (n_log.gross_liters_sold or Decimal(0)) * (n_log.product_price or Decimal(0))
+        if gross_liters > 0:
+            avg_price = gross_sales / gross_liters
+        else:
+            avg_price = Decimal(0)
+        pdata['net_vol'] = net_liters
+        pdata['value'] = net_liters * avg_price
+        total_sales_value += net_liters * avg_price
             
     # Calculate Price Change Gain/Loss
     total_price_change = Decimal('0')
@@ -283,11 +349,12 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
     margin_data = [["Product", "Liters Sold", "Revenue (Rs.)", "Margin (Rs./L)", "Gross Profit (Rs.)"]]
     for pid, pdata in volume_by_product.items():
         margin = margins.get(pid, Decimal('0'))
-        profit = pdata['vol'] * margin
+        net_liters = pdata.get('net_vol', pdata['vol'])
+        profit = net_liters * margin
         gross_profit += profit
         margin_data.append([
             pdata['name'], 
-            f"{pdata['vol']:,.2f}", 
+            f"{net_liters:,.2f}", 
             f"{pdata['value']:,.2f}",
             f"{margin:,.2f}", 
             f"{profit:,.2f}"
@@ -321,8 +388,23 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
     total_variance_profit_loss = Decimal('0')
     
     for tid, tdata in variance_by_tank.items():
-        margin = margins.get(tdata['product_id'], Decimal('0'))
-        var_pl = tdata['var'] * margin
+        product = None
+        if hasattr(tdata, 'get'):
+            product_id = tdata.get('product_id')
+            for s in sessions:
+                for t_log in s.tank_logs:
+                    if t_log.tank_id == tid and t_log.tank and getattr(t_log.tank, 'product_id', None) == product_id:
+                        product = t_log.tank.product
+                        break
+                if product:
+                    break
+        if product is None:
+            product = next((t_log.tank.product for s in sessions for t_log in s.tank_logs if t_log.tank_id == tid), None)
+
+        unit_price = getattr(product, 'current_price', Decimal('0')) if product else Decimal('0')
+        if unit_price == Decimal('0'):
+            unit_price = margins.get(tdata['product_id'], Decimal('0'))
+        var_pl = tdata['var'] * unit_price
         total_variance_profit_loss += var_pl
         
         # Color coding for variance

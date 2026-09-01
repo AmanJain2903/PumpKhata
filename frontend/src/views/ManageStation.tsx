@@ -82,6 +82,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
   // Tank Edit Modal states
   const [editingTank, setEditingTank] = useState<any | null>(null);
+  const [tankEditMode, setTankEditMode] = useState<'full' | 'dip'>('full');
   const [isTankModalOpen, setIsTankModalOpen] = useState(false);
   const [tankName, setTankName] = useState('');
   const [tankProductId, setTankProductId] = useState<number>(0);
@@ -582,6 +583,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   // --- Tank Editing Operations ---
   const handleOpenAddTankModal = () => {
     setEditingTank(null);
+    setTankEditMode('full');
     setTankName('');
     setTankProductId(products[0]?.id || 0);
     setTankMaxCapacity('20000');
@@ -590,13 +592,14 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     setIsTankModalOpen(true);
   };
 
-  const handleOpenEditTankModal = (tank: any) => {
+  const handleOpenEditTankModal = (tank: any, mode: 'full' | 'dip' = 'full') => {
     setEditingTank(tank);
+    setTankEditMode(mode);
     setTankName(tank.name);
     setTankProductId(tank.product_id);
     setTankMaxCapacity((tank.max_capacity || 0).toString());
     setTankDipVolume((tank.actual_dip_volume || 0).toString());
-    setTankVariance((tank.variance || 0).toString());
+    setTankVariance((tank.variance ?? 0).toString());
     setIsTankModalOpen(true);
   };
 
@@ -607,15 +610,17 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     const prod = products.find(p => p.id === tankProductId);
     const productName = prod ? prod.name : 'Fuel';
 
-    if (!tankName.trim()) {
-      alert('Tank name cannot be empty.');
-      return;
+    if (tankEditMode === 'full' || !editingTank) {
+      if (!tankName.trim()) {
+        alert('Tank name cannot be empty.');
+        return;
+      }
+      if (isNaN(capacity) || capacity <= 0) {
+        alert('Max capacity must be a positive number.');
+        return;
+      }
     }
-    if (isNaN(capacity) || capacity <= 0) {
-      alert('Max capacity must be a positive number.');
-      return;
-    }
-    if (isNaN(dip) || dip < 0 || dip > capacity) {
+    if (isNaN(dip) || dip < 0 || (tankEditMode === 'full' || !editingTank) && dip > capacity) {
       alert('Current volume must be between 0 and max capacity.');
       return;
     }
@@ -627,12 +632,12 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
         if (isMatch) {
           return {
             ...t,
-            name: tankName,
-            product_id: tankProductId,
-            product_name: productName,
-            max_capacity: capacity,
+            name: tankEditMode === 'full' ? tankName : t.name,
+            product_id: tankEditMode === 'full' ? tankProductId : t.product_id,
+            product_name: tankEditMode === 'full' ? productName : t.product_name,
+            max_capacity: tankEditMode === 'full' ? capacity : t.max_capacity,
             actual_dip_volume: dip,
-            variance: variance
+            variance: tankEditMode === 'full' ? variance : (Number(tankVariance) || 0)
           };
         }
         return t;
@@ -1334,17 +1339,17 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                   </div>
 
                                   {/* Tank configuration buttons */}
-                                  {!hasLogs && (
-                                    <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
-                                      <button
-                                        onClick={() => handleOpenEditTankModal(tank)}
-                                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
-                                        title="Edit Tank Details"
-                                      >
-                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                        </svg>
-                                      </button>
+                                  <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
+                                    <button
+                                      onClick={() => handleOpenEditTankModal(tank, hasLogs ? 'dip' : 'full')}
+                                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-650 transition-colors border border-slate-200 cursor-pointer shadow-sm"
+                                      title={hasLogs ? 'Edit Tank Dip Reading' : 'Edit Tank Details'}
+                                    >
+                                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                      </svg>
+                                    </button>
+                                    {!hasLogs && (
                                       <button
                                         onClick={() => handleDeleteTank(tank)}
                                         className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 transition-colors cursor-pointer shadow-sm"
@@ -1354,8 +1359,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                                           <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                         </svg>
                                       </button>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -1824,50 +1829,56 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-6">
             <div>
               <h3 className="text-lg font-bold text-slate-900 font-display">
-                {editingTank ? `Edit Tank: ${editingTank.name}` : 'Configure New Tank'}
+                {editingTank ? (tankEditMode === 'dip' ? `Adjust Dip: ${editingTank.name}` : `Edit Tank: ${editingTank.name}`) : 'Configure New Tank'}
               </h3>
-              <p className="text-xs text-slate-500 mt-1">Configure storage metrics and dynamic fuel product</p>
+              <p className="text-xs text-slate-500 mt-1">
+                {tankEditMode === 'dip' ? 'Update this tank’s actual dip reading and optional variance for the active session.' : 'Configure storage metrics and dynamic fuel product'}
+              </p>
             </div>
 
             <div className="space-y-4">
-              {/* Tank Name */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-600 block">Tank Label/Name</label>
-                <input
-                  type="text"
-                  value={tankName}
-                  onChange={(e) => setTankName(e.target.value)}
-                  className="w-full text-xs border border-slate-200 rounded-xl p-3 focus:outline-emerald-500"
-                  placeholder="e.g. Tank 1, Diesel Tank A"
-                />
-              </div>
+              {tankEditMode === 'full' && (
+                <>
+                  {/* Tank Name */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 block">Tank Label/Name</label>
+                    <input
+                      type="text"
+                      value={tankName}
+                      onChange={(e) => setTankName(e.target.value)}
+                      className="w-full text-xs border border-slate-200 rounded-xl p-3 focus:outline-emerald-500"
+                      placeholder="e.g. Tank 1, Diesel Tank A"
+                    />
+                  </div>
 
-              {/* Product Selector */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-600 block">Fuel Product</label>
-                <SmartDropdown
-                  value={tankProductId.toString()}
-                  onChange={(val) => setTankProductId(parseInt(val, 10))}
-                  placeholder="Select Fuel Product..."
-                  options={products.map(p => ({
-                    value: p.id.toString(),
-                    label: `${p.name} (Current: ₹${parseFloat(p.current_price as any).toFixed(2)})`,
-                  }))}
-                />
-              </div>
+                  {/* Product Selector */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 block">Fuel Product</label>
+                    <SmartDropdown
+                      value={tankProductId.toString()}
+                      onChange={(val) => setTankProductId(parseInt(val, 10))}
+                      placeholder="Select Fuel Product..."
+                      options={products.map(p => ({
+                        value: p.id.toString(),
+                        label: `${p.name} (Current: ₹${parseFloat(p.current_price as any).toFixed(2)})`,
+                      }))}
+                    />
+                  </div>
 
-              {/* Capacity */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-600 block">Max Capacity (Litres)</label>
-                <input
-                  type="number"
-                  value={tankMaxCapacity}
-                  onChange={(e) => setTankMaxCapacity(e.target.value)}
-                  className="w-full text-xs border border-slate-200 rounded-xl p-3 focus:outline-emerald-500"
-                  placeholder="e.g. 20000"
-                  min="1"
-                />
-              </div>
+                  {/* Capacity */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 block">Max Capacity (Litres)</label>
+                    <input
+                      type="number"
+                      value={tankMaxCapacity}
+                      onChange={(e) => setTankMaxCapacity(e.target.value)}
+                      className="w-full text-xs border border-slate-200 rounded-xl p-3 focus:outline-emerald-500"
+                      placeholder="e.g. 20000"
+                      min="1"
+                    />
+                  </div>
+                </>
+              )}
 
               {/* Dip volume */}
               <div className="space-y-1.5">
@@ -1884,7 +1895,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
               {/* Starting variance */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-600 block">Starting Variance (Litres)</label>
+                <label className="text-xs font-semibold text-slate-600 block">Variance (Litres)</label>
                 <input
                   type="number"
                   value={tankVariance}
