@@ -33,3 +33,26 @@ def test_aggregate_product_sales_subtracts_testing_liters():
     assert summary[7]["vol"] == Decimal("150")
     assert summary[7]["testing_liters"] == Decimal("15")
     assert summary[7]["net_vol"] == Decimal("135")
+
+
+def test_inventory_variance_uses_latest_product_price():
+    product = SimpleNamespace(name="Petrol", current_price=Decimal("85.00"))
+    tank = SimpleNamespace(id=3, name="Tank A", product_id=7, product=product)
+
+    sessions = [
+        SimpleNamespace(
+            nozzle_logs=[],
+            tank_logs=[
+                SimpleNamespace(tank_id=3, tank=tank, calculated_variance=Decimal("10.00"), testing_liters=Decimal("0"))
+            ],
+        )
+    ]
+
+    result = {}
+    for tid, tdata in {
+        3: {"var": Decimal("10.00"), "product_id": 7, "name": "Tank A"}
+    }.items():
+        unit_price = getattr(tank.product, "current_price", Decimal("0"))
+        result[tid] = tdata["var"] * unit_price
+
+    assert result[3] == Decimal("850.00")

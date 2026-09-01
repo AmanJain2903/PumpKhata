@@ -388,8 +388,23 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
     total_variance_profit_loss = Decimal('0')
     
     for tid, tdata in variance_by_tank.items():
-        margin = margins.get(tdata['product_id'], Decimal('0'))
-        var_pl = tdata['var'] * margin
+        product = None
+        if hasattr(tdata, 'get'):
+            product_id = tdata.get('product_id')
+            for s in sessions:
+                for t_log in s.tank_logs:
+                    if t_log.tank_id == tid and t_log.tank and getattr(t_log.tank, 'product_id', None) == product_id:
+                        product = t_log.tank.product
+                        break
+                if product:
+                    break
+        if product is None:
+            product = next((t_log.tank.product for s in sessions for t_log in s.tank_logs if t_log.tank_id == tid), None)
+
+        unit_price = getattr(product, 'current_price', Decimal('0')) if product else Decimal('0')
+        if unit_price == Decimal('0'):
+            unit_price = margins.get(tdata['product_id'], Decimal('0'))
+        var_pl = tdata['var'] * unit_price
         total_variance_profit_loss += var_pl
         
         # Color coding for variance
