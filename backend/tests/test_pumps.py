@@ -55,6 +55,7 @@ def test_manual_tank_dip_update_updates_live_tank_without_creating_log(db_sessio
 
     previous_date = datetime.now(IST).date() - timedelta(days=1)
     previous_session = DailyLogSession(
+        id=1,
         pump_id=pump.id,
         log_date=previous_date,
         status=DailyLogSessionStatus.CLOSED,
@@ -68,6 +69,7 @@ def test_manual_tank_dip_update_updates_live_tank_without_creating_log(db_sessio
     db_session.flush()
 
     previous_log = DailyTankLog(
+        id=1,
         session_id=previous_session.id,
         tank_id=tank.id,
         log_date=previous_date,
@@ -80,6 +82,7 @@ def test_manual_tank_dip_update_updates_live_tank_without_creating_log(db_sessio
     db_session.add(previous_log)
 
     today_session = DailyLogSession(
+        id=2,
         pump_id=pump.id,
         log_date=datetime.now(IST).date(),
         status=DailyLogSessionStatus.OPEN,
