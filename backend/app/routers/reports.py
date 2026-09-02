@@ -77,6 +77,10 @@ def generate_reports(
         'salary': request.salary_expenditure,
         'misc': request.misc_expenditure
     }
+    incomes = {
+        'extra_income': request.extra_income,
+        'dealer_margin_income': request.dealer_margin_income
+    }
 
     # 3. Generate ZIP buffer
     user_name = f"{current_user.first_name} {current_user.last_name}".strip() if current_user else "System"
@@ -86,6 +90,7 @@ def generate_reports(
         sessions=sessions,
         margins=request.margins,
         exps=exps,
+        incomes=incomes,
         start_date=request.start_date,
         end_date=request.end_date,
         generated_by=user_name

@@ -11,3 +11,5 @@ class ReportGenerateRequest(BaseModel):
     iocl_expenditure: Decimal = Decimal('0')
     salary_expenditure: Decimal = Decimal('0')
     misc_expenditure: Decimal = Decimal('0')
+    extra_income: Decimal = Decimal('0')
+    dealer_margin_income: Decimal = Decimal('0')
