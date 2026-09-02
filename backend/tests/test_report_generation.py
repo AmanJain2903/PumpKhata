@@ -1,7 +1,8 @@
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.pdf_generator import _aggregate_product_sales
+from app.services.pdf_generator import _aggregate_product_sales, generate_report_pdf
 
 
 def test_aggregate_product_sales_subtracts_testing_liters():
@@ -56,3 +57,28 @@ def test_inventory_variance_uses_latest_product_price():
         result[tid] = tdata["var"] * unit_price
 
     assert result[3] == Decimal("850.00")
+
+
+def test_generate_report_pdf_includes_extra_income_in_net_profit():
+    pump = SimpleNamespace(name="Test Pump", pump_accounts=[])
+    sessions = []
+    margins = {}
+    exps = {
+        'bank': Decimal('100'),
+        'iocl': Decimal('0'),
+        'salary': Decimal('0'),
+        'misc': Decimal('0'),
+    }
+
+    pdf = generate_report_pdf(
+        pump=pump,
+        sessions=sessions,
+        margins=margins,
+        exps=exps,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+        generated_by='Tester',
+        incomes={'extra_income': Decimal('50'), 'dealer_margin_income': Decimal('20')},
+    )
+
+    assert pdf.startswith(b'%PDF')

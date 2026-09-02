@@ -64,7 +64,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
 
   // Reports states
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [reportStep, setReportStep] = useState<1 | 2>(1);
+  const [reportStep, setReportStep] = useState<1 | 2 | 3>(1);
   const [reportMinDate, setReportMinDate] = useState('');
   const [reportMaxDate, setReportMaxDate] = useState('');
   const [reportStartDate, setReportStartDate] = useState('');
@@ -77,6 +77,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
   const [reportIoclExpenditure, setReportIoclExpenditure] = useState('');
   const [reportSalaryExpenditure, setReportSalaryExpenditure] = useState('');
   const [reportMiscExpenditure, setReportMiscExpenditure] = useState('');
+  const [reportExtraIncome, setReportExtraIncome] = useState('');
+  const [reportDealerMarginIncome, setReportDealerMarginIncome] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportDownloadMessage, setReportDownloadMessage] = useState('');
 
@@ -220,6 +222,8 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
     setReportIoclExpenditure('');
     setReportSalaryExpenditure('');
     setReportMiscExpenditure('');
+    setReportExtraIncome('');
+    setReportDealerMarginIncome('');
 
     try {
       const data = await apiService.getReportBoundaries(pumpId);
@@ -2276,7 +2280,7 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                       </p>
                     </div>
                   </div>
-                ) : (
+                ) : reportStep === 2 ? (
                   <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-sm mx-auto">
                     <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1 items-center mb-2">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Generating Report For</p>
@@ -2300,57 +2304,96 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                         ))}
                       </div>
                     </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-sm mx-auto">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1 items-center mb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Final Report Inputs</p>
+                      <p className="text-xs font-semibold text-emerald-900">{formatLocalDateStr(reportStartDate)} → {formatLocalDateStr(reportEndDate)}</p>
+                    </div>
 
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Expenditures</h3>
-                      <div className="flex flex-col gap-3">
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-600 font-medium">Bank Expenditures (₹)</span>
-                          <input
-                            type="text"
-                            value={reportBankExpenditure}
-                            onChange={(e) => setReportBankExpenditure(e.target.value)}
-                            onBlur={(e) => setReportBankExpenditure(parseSumExpression(e.target.value))}
-                            onKeyDown={(e) => e.key === 'Enter' && setReportBankExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
-                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
-                            placeholder="0"
-                          />
+                    <div className="space-y-5">
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Expenditures</h3>
+                        <div className="flex flex-col gap-3">
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">Bank Expenditures (₹)</span>
+                            <input
+                              type="text"
+                              value={reportBankExpenditure}
+                              onChange={(e) => setReportBankExpenditure(e.target.value)}
+                              onBlur={(e) => setReportBankExpenditure(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportBankExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">IOCL Expenditures (₹)</span>
+                            <input
+                              type="text"
+                              value={reportIoclExpenditure}
+                              onChange={(e) => setReportIoclExpenditure(e.target.value)}
+                              onBlur={(e) => setReportIoclExpenditure(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportIoclExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">Salaries (₹)</span>
+                            <input
+                              type="text"
+                              value={reportSalaryExpenditure}
+                              onChange={(e) => setReportSalaryExpenditure(e.target.value)}
+                              onBlur={(e) => setReportSalaryExpenditure(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportSalaryExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">Misc Expenditure (₹)</span>
+                            <input
+                              type="text"
+                              value={reportMiscExpenditure}
+                              onChange={(e) => setReportMiscExpenditure(e.target.value)}
+                              onBlur={(e) => setReportMiscExpenditure(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportMiscExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
                         </div>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-600 font-medium">IOCL Expenditures (₹)</span>
-                          <input
-                            type="text"
-                            value={reportIoclExpenditure}
-                            onChange={(e) => setReportIoclExpenditure(e.target.value)}
-                            onBlur={(e) => setReportIoclExpenditure(parseSumExpression(e.target.value))}
-                            onKeyDown={(e) => e.key === 'Enter' && setReportIoclExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
-                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
-                            placeholder="0"
-                          />
-                        </div>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-600 font-medium">Salaries (₹)</span>
-                          <input
-                            type="text"
-                            value={reportSalaryExpenditure}
-                            onChange={(e) => setReportSalaryExpenditure(e.target.value)}
-                            onBlur={(e) => setReportSalaryExpenditure(parseSumExpression(e.target.value))}
-                            onKeyDown={(e) => e.key === 'Enter' && setReportSalaryExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
-                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
-                            placeholder="0"
-                          />
-                        </div>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-600 font-medium">Misc Expenditure (₹)</span>
-                          <input
-                            type="text"
-                            value={reportMiscExpenditure}
-                            onChange={(e) => setReportMiscExpenditure(e.target.value)}
-                            onBlur={(e) => setReportMiscExpenditure(parseSumExpression(e.target.value))}
-                            onKeyDown={(e) => e.key === 'Enter' && setReportMiscExpenditure(parseSumExpression((e.target as HTMLInputElement).value))}
-                            className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
-                            placeholder="0"
-                          />
+                      </div>
+
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 pb-2 border-b border-slate-100">Incomes</h3>
+                        <div className="flex flex-col gap-3">
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">Extra Income (₹)</span>
+                            <input
+                              type="text"
+                              value={reportExtraIncome}
+                              onChange={(e) => setReportExtraIncome(e.target.value)}
+                              onBlur={(e) => setReportExtraIncome(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportExtraIncome(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-slate-600 font-medium">Dealer Margin Income (₹)</span>
+                            <input
+                              type="text"
+                              value={reportDealerMarginIncome}
+                              onChange={(e) => setReportDealerMarginIncome(e.target.value)}
+                              onBlur={(e) => setReportDealerMarginIncome(parseSumExpression(e.target.value))}
+                              onKeyDown={(e) => e.key === 'Enter' && setReportDealerMarginIncome(parseSumExpression((e.target as HTMLInputElement).value))}
+                              className="w-32 text-right border border-slate-300 rounded-lg px-2 py-1 focus:ring-1 focus:ring-emerald-500 outline-none text-slate-800 font-semibold"
+                              placeholder="0"
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2374,8 +2417,32 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                 >
                   Next →
                 </button>
+              ) : reportStep === 2 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setReportStep(1)}
+                    className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 transition-all shadow-sm cursor-pointer"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
+                    onClick={() => setReportStep(3)}
+                    className="px-6 py-2.5 rounded-xl font-bold text-sm text-white bg-slate-800 hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md cursor-pointer"
+                  >
+                    Next →
+                  </button>
+                </>
               ) : (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => setReportStep(2)}
+                    className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 transition-all shadow-sm cursor-pointer"
+                  >
+                    ← Back
+                  </button>
                   <button
                     disabled={!reportMinDate || !reportStartDate || !reportEndDate || isFetchingBoundaries}
                     onClick={async () => {
@@ -2391,7 +2458,9 @@ export const ManageStation: React.FC<ManageStationProps> = ({ pumpId, onBack, on
                           bank_expenditure: parseFloat(reportBankExpenditure) || 0,
                           iocl_expenditure: parseFloat(reportIoclExpenditure) || 0,
                           salary_expenditure: parseFloat(reportSalaryExpenditure) || 0,
-                          misc_expenditure: parseFloat(reportMiscExpenditure) || 0
+                          misc_expenditure: parseFloat(reportMiscExpenditure) || 0,
+                          extra_income: parseFloat(reportExtraIncome) || 0,
+                          dealer_margin_income: parseFloat(reportDealerMarginIncome) || 0,
                         };
 
                         const blob = await apiService.generateReport(pumpId, payload);

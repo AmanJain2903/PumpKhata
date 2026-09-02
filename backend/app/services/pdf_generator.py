@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Dict, Any
 
 from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -241,10 +241,20 @@ def generate_statement_pdf(pump: Any, sessions: List[Any], start_date: date, end
     buffer.close()
     return pdf_bytes
 
-def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decimal], exps: Dict[str, Decimal], start_date: date, end_date: date, generated_by: str = "") -> bytes:
+def generate_report_pdf(
+    pump: Any,
+    sessions: List[Any],
+    margins: Dict[int, Decimal],
+    exps: Dict[str, Decimal],
+    start_date: date,
+    end_date: date,
+    generated_by: str = "",
+    incomes: Dict[str, Decimal] | None = None,
+) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     elements = []
+    incomes = incomes or {}
     
     elements.append(Paragraph(f"{pump.name}", title_style))
     elements.append(Spacer(1, 0.1*inch))
@@ -274,6 +284,13 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
                 ('LINEBELOW', (0,-1), (-1,-1), 1, colors.HexColor('#e2e8f0')),
             ])
         return TableStyle(style)
+
+    def add_section(title: str, content: list, *, spacing_after: float = 0.18 * inch):
+        section = [Paragraph(title, section_title_style)]
+        section.extend(content)
+        elements.append(KeepTogether(section))
+        if spacing_after > 0:
+            elements.append(Spacer(1, spacing_after))
         
     section_title_style = ParagraphStyle(
         "SectionTitle",
@@ -345,7 +362,6 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
             total_price_change += s.price_change_gain_loss_total
             
     # Draw Revenue & Margins Table
-    elements.append(Paragraph("GROSS PROFIT", section_title_style))
     margin_data = [["Product", "Liters Sold", "Revenue (Rs.)", "Margin (Rs./L)", "Gross Profit (Rs.)"]]
     for pid, pdata in volume_by_product.items():
         margin = margins.get(pid, Decimal('0'))
@@ -363,26 +379,37 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
     
     tm = Table(margin_data, colWidths=[1.5*inch, 1.2*inch, 1.2*inch, 1.2*inch, 1.5*inch])
     tm.setStyle(get_pro_table_style(has_total_row=True))
-    elements.append(tm)
+    add_section("GROSS PROFIT", [tm])
     
     # 2. Expenditures
-    elements.append(Paragraph("EXPENDITURES", section_title_style))
     exp_data = [
         ["Category", "Amount (Rs.)"],
-        ["Bank Expenditures", f"{exps['bank']:,.2f}"],
-        ["IOCL Expenditures", f"{exps['iocl']:,.2f}"],
-        ["Salaries", f"{exps['salary']:,.2f}"],
-        ["Misc Expenditures", f"{exps['misc']:,.2f}"]
+        ["Bank Expenditures", f"{exps.get('bank', Decimal('0')):,.2f}"],
+        ["IOCL Expenditures", f"{exps.get('iocl', Decimal('0')):,.2f}"],
+        ["Salaries", f"{exps.get('salary', Decimal('0')):,.2f}"],
+        ["Misc Expenditures", f"{exps.get('misc', Decimal('0')):,.2f}"]
     ]
-    total_exp = exps['bank'] + exps['iocl'] + exps['salary'] + exps['misc']
+    total_exp = exps.get('bank', Decimal('0')) + exps.get('iocl', Decimal('0')) + exps.get('salary', Decimal('0')) + exps.get('misc', Decimal('0'))
     exp_data.append(["TOTAL EXPENDITURES", f"{total_exp:,.2f}"])
     
     te = Table(exp_data, colWidths=[3*inch, 2*inch])
     te.setStyle(get_pro_table_style(has_total_row=True))
-    elements.append(te)
+    add_section("EXPENDITURES", [te])
+
+    # 3. Additional Incomes
+    income_data = [
+        ["Category", "Amount (Rs.)"],
+        ["Extra Income", f"{incomes.get('extra_income', Decimal('0')):,.2f}"],
+        ["Dealer Margin Income", f"{incomes.get('dealer_margin_income', Decimal('0')):,.2f}"]
+    ]
+    total_income = incomes.get('extra_income', Decimal('0')) + incomes.get('dealer_margin_income', Decimal('0'))
+    income_data.append(["TOTAL INCOMES", f"{total_income:,.2f}"])
+
+    ti = Table(income_data, colWidths=[3*inch, 2*inch])
+    ti.setStyle(get_pro_table_style(has_total_row=True))
+    add_section("ADDITIONAL INCOMES", [ti])
     
-    # 3. Inventory Loss/Gain
-    elements.append(Paragraph("INVENTORY VARIANCE", section_title_style))
+    # 4. Inventory Loss/Gain
     inv_data = [["Tank", "Total Variance (Liters)", "Variance Profit/Loss (Rs.)"]]
     
     total_variance_profit_loss = Decimal('0')
@@ -422,21 +449,17 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
         
     ti = Table(inv_data, colWidths=[2.5*inch, 2.5*inch, 2*inch])
     ti.setStyle(get_pro_table_style(has_total_row=False))
-    elements.append(ti)
-    elements.append(Spacer(1, 0.4*inch))
+    add_section("INVENTORY VARIANCE", [ti], spacing_after=0.25 * inch)
     
-    # Page Break for Final Calculation
-    elements.append(PageBreak())
-    
-    # 4. Final Net Profit/Loss Calculation Breakdown
-    elements.append(Paragraph("NET PROFIT CALCULATION", section_title_style))
-    
-    net_profit = gross_profit + total_variance_profit_loss + total_price_change - total_exp
+    # 5. Final Net Profit/Loss Calculation Breakdown
+    total_income = incomes.get('extra_income', Decimal('0')) + incomes.get('dealer_margin_income', Decimal('0'))
+    net_profit = gross_profit + total_variance_profit_loss + total_price_change + total_income - total_exp
     
     breakdown_data = [
         ["Gross Profit (Sales)", f"Rs. {gross_profit:,.2f}"],
         ["Variance Profit/Loss", f"Rs. {abs(total_variance_profit_loss):,.2f}"],
         ["Price Change Gain/Loss", f"Rs. {abs(total_price_change):,.2f}"],
+        ["Total Income", f"Rs. {total_income:,.2f}"],
         ["Total Expenditures", f"- Rs. {total_exp:,.2f}"],
         ["NET PROFIT / LOSS", f"Rs. {net_profit:,.2f}"]
     ]
@@ -451,8 +474,11 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
         ('ALIGN', (1,0), (1,-1), 'RIGHT'),
         ('BOTTOMPADDING', (0,0), (-1,-1), 10),
         
+        # Income in green
+        ('TEXTCOLOR', (1,3), (1,3), colors.green),
+
         # Expenditures in Red
-        ('TEXTCOLOR', (1,3), (1,3), colors.red),
+        ('TEXTCOLOR', (1,4), (1,4), colors.red),
         
         # Variance color
         ('TEXTCOLOR', (1,1), (1,1), colors.green if total_variance_profit_loss >= 0 else colors.red),
@@ -474,9 +500,18 @@ def generate_report_pdf(pump: Any, sessions: List[Any], margins: Dict[int, Decim
     buffer.close()
     return pdf_bytes
 
-def generate_report_zip(pump: Any, sessions: List[Any], margins: Dict[int, Decimal], exps: Dict[str, Decimal], start_date: date, end_date: date, generated_by: str = "") -> bytes:
+def generate_report_zip(
+    pump: Any,
+    sessions: List[Any],
+    margins: Dict[int, Decimal],
+    exps: Dict[str, Decimal],
+    start_date: date,
+    end_date: date,
+    generated_by: str = "",
+    incomes: Dict[str, Decimal] | None = None,
+) -> bytes:
     statement_pdf = generate_statement_pdf(pump, sessions, start_date, end_date, generated_by)
-    report_pdf = generate_report_pdf(pump, sessions, margins, exps, start_date, end_date, generated_by)
+    report_pdf = generate_report_pdf(pump, sessions, margins, exps, start_date, end_date, generated_by, incomes=incomes)
     
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
