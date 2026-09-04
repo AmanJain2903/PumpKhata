@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models.product import Product, ProductPriceHistory
 from app.models.fuel_pump import FuelPump
+from app.models.log import DailyLogSession
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -104,6 +105,19 @@ def update_product_price(product_id: int, req: PriceUpdateRequest, db: Session =
         raise HTTPException(status_code=404, detail="Product not found")
 
     now = datetime.now(IST)
+    linked_pumps = [pump for pump in db_product.pumps if pump.is_active]
+    if linked_pumps:
+        log_date = min(
+            DailyLogSession.get_next_valid_date(db, pump.id)
+            for pump in linked_pumps
+        )
+    else:
+        log_date = now.date() - timedelta(days=1)
+    log_timestamp = now.replace(
+        year=log_date.year,
+        month=log_date.month,
+        day=log_date.day,
+    )
 
     # 1. Update existing active history record(s) valid_to
     active_history = db.query(ProductPriceHistory).filter(
@@ -111,14 +125,14 @@ def update_product_price(product_id: int, req: PriceUpdateRequest, db: Session =
         ProductPriceHistory.valid_to == None
     ).all()
     for hist in active_history:
-        hist.valid_to = now
+        hist.valid_to = log_timestamp
 
     # 2. Create new history record
     new_history = ProductPriceHistory(
         product_id=product_id,
         selling_price=req.selling_price,
         cost_margin=req.cost_margin,
-        valid_from=now,
+        valid_from=log_timestamp,
         valid_to=None
     )
     db.add(new_history)
