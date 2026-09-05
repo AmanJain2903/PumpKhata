@@ -242,9 +242,14 @@ def prefill_shift_log(pump_id: int, log_timestamp: Optional[datetime] = None, db
     # 3. Fetch tanks and their opening dip volumes
     prefill_tanks = []
     for tank in pump.tanks:
-        # Manual dip changes update the tank table directly, so the live tank reading is the source
-        # for the opening dip shown on the daily log page and used in calculations.
         opening_dip_volume = tank.actual_dip_volume
+        if prev_session:
+            prev_tank_log = db.query(DailyTankLog).filter(
+                DailyTankLog.session_id == prev_session.id,
+                DailyTankLog.tank_id == tank.id
+            ).first()
+            if prev_tank_log:
+                opening_dip_volume = prev_tank_log.actual_dip_volume
 
         prefill_tanks.append(PrefillTankResponse(
             tank_id=tank.id,
@@ -534,9 +539,20 @@ def save_tank_readings(session_id: int, readings: List[TankReadingsSave], db: Se
         if not tank:
             raise HTTPException(status_code=404, detail=f"Tank {r.tank_id} not found")
 
-        # Manual dip edits update the tank table directly, so the live tank value is the opening dip.
-        opening_dip = tank.actual_dip_volume
+        # Fetch the opening dip from the previous session's closing dip
+        prev_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == session.pump_id,
+            DailyLogSession.log_date < session.log_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
 
+        opening_dip = tank.actual_dip_volume
+        if prev_session:
+            prev_tank_log = db.query(DailyTankLog).filter(
+                DailyTankLog.session_id == prev_session.id,
+                DailyTankLog.tank_id == tank.id
+            ).first()
+            if prev_tank_log:
+                opening_dip = prev_tank_log.actual_dip_volume
         # Compute total gross sold from nozzles connected to this tank in this session
         gross_sold = Decimal("0.0")
         for nozzle in tank.nozzles:
@@ -818,7 +834,6 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
         
     closing_cash = cash_balance_before - total_deposited
 
-
     # Update session summary values
     session.status = DailyLogSessionStatus.CLOSED
     session.closed_at = datetime.now(IST)
@@ -965,9 +980,21 @@ def close_session(session_id: int, req: CloseSessionRequest, db: Session = Depen
 
         # Find all tanks for this product at this pump
         product_tanks = [t for t in pump.tanks if t.product_id == product.id]
+        
+        prev_session = db.query(DailyLogSession).filter(
+            DailyLogSession.pump_id == session.pump_id,
+            DailyLogSession.log_date < session.log_date
+        ).order_by(DailyLogSession.log_date.desc()).first()
+
         for tank in product_tanks:
-            # Manual tank edits are persisted directly in the tank table, so that live value is the opening dip.
             opening_dip = tank.actual_dip_volume
+            if prev_session:
+                prev_tank_log = db.query(DailyTankLog).filter(
+                    DailyTankLog.session_id == prev_session.id,
+                    DailyTankLog.tank_id == tank.id
+                ).first()
+                if prev_tank_log:
+                    opening_dip = prev_tank_log.actual_dip_volume
 
             # Sum fuel sold at old price from all nozzles connected to this tank (entry_index = 0)
             tank_nozzle_ids = [n.id for n in tank.nozzles if n.is_active]
